@@ -85,15 +85,16 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  // In production (Railway, etc.) the platform injects PORT and routes traffic
+  // to exactly that port, then health-checks it — so we must bind to it as-is.
+  // Only in development do we hunt for a free port to avoid local clashes.
+  const envPort = parseInt(process.env.PORT || "3000");
+  const port =
+    process.env.NODE_ENV === "production" ? envPort : await findAvailablePort(envPort);
 
-  if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
-  }
-
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  // Bind on 0.0.0.0 so the container is reachable from the platform's router.
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${port}/`);
   });
 }
 
