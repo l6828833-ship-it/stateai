@@ -1,53 +1,479 @@
 {
-  "version": "5",
-  "dialect": "mysql",
-  "id": "bd33c4f9-bf71-42e2-9c0b-332b802d25fb",
+  "id": "d85f4232-d51d-488a-925c-4dec03a1c970",
   "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
   "tables": {
-    "users": {
-      "name": "users",
+    "public.auth_codes": {
+      "name": "auth_codes",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
-          "type": "int",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "openId": {
-          "name": "openId",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
         },
         "email": {
           "name": "email",
           "type": "varchar(320)",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": true
+        },
+        "codeHash": {
+          "name": "codeHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "auth_purpose",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.generation_jobs": {
+      "name": "generation_jobs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "projectId": {
+          "name": "projectId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "job_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'processing'"
+        },
+        "tourStyle": {
+          "name": "tourStyle",
+          "type": "tour_style",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "aspectRatio": {
+          "name": "aspectRatio",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "clipDuration": {
+          "name": "clipDuration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imageSequence": {
+          "name": "imageSequence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "optimizedPrompt": {
+          "name": "optimizedPrompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "openrouterJobId": {
+          "name": "openrouterJobId",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "videoKey": {
+          "name": "videoKey",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "videoUrl": {
+          "name": "videoUrl",
+          "type": "varchar(768)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "thumbnailUrl": {
+          "name": "thumbnailUrl",
+          "type": "varchar(768)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "errorMessage": {
+          "name": "errorMessage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.project_images": {
+      "name": "project_images",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "projectId": {
+          "name": "projectId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequenceIndex": {
+          "name": "sequenceIndex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileKey": {
+          "name": "fileKey",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "url": {
+          "name": "url",
+          "type": "varchar(768)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileName": {
+          "name": "fileName",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mimeType": {
+          "name": "mimeType",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "roomTag": {
+          "name": "roomTag",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.projects": {
+      "name": "projects",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'My Property Tour'"
+        },
+        "tourStyle": {
+          "name": "tourStyle",
+          "type": "tour_style",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'Walkthrough'"
+        },
+        "creativeText": {
+          "name": "creativeText",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'720p'"
+        },
+        "aspectRatio": {
+          "name": "aspectRatio",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'16:9'"
+        },
+        "clipDuration": {
+          "name": "clipDuration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 5
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.subscriptions": {
+      "name": "subscriptions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stripeCustomerId": {
+          "name": "stripeCustomerId",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stripeSubscriptionId": {
+          "name": "stripeSubscriptionId",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan": {
+          "name": "plan",
+          "type": "plan",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'inactive'"
+        },
+        "currentPeriodEnd": {
+          "name": "currentPeriodEnd",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "subscriptions_userId_unique": {
+          "name": "subscriptions_userId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "userId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "openId": {
+          "name": "openId",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(320)",
+          "primaryKey": false,
+          "notNull": false
         },
         "loginMethod": {
           "name": "loginMethod",
           "type": "varchar(64)",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
+        },
+        "passwordHash": {
+          "name": "passwordHash",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "emailVerified": {
+          "name": "emailVerified",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         },
         "role": {
           "name": "role",
-          "type": "enum('user','admin')",
+          "type": "role",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
           "default": "'user'"
         },
         "createdAt": {
@@ -55,56 +481,95 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
+          "default": "now()"
         },
         "updatedAt": {
           "name": "updatedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "onUpdate": true,
-          "default": "(now())"
+          "default": "now()"
         },
         "lastSignedIn": {
           "name": "lastSignedIn",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
+          "default": "now()"
         }
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "users_id": {
-          "name": "users_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "users_openId_unique": {
           "name": "users_openId_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "openId"
           ]
         }
       },
-      "checkConstraint": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
+  "enums": {
+    "public.auth_purpose": {
+      "name": "auth_purpose",
+      "schema": "public",
+      "values": [
+        "signup",
+        "login",
+        "reset"
+      ]
+    },
+    "public.job_status": {
+      "name": "job_status",
+      "schema": "public",
+      "values": [
+        "processing",
+        "ready",
+        "failed"
+      ]
+    },
+    "public.plan": {
+      "name": "plan",
+      "schema": "public",
+      "values": [
+        "starter",
+        "pro",
+        "annual",
+        "business"
+      ]
+    },
+    "public.role": {
+      "name": "role",
+      "schema": "public",
+      "values": [
+        "user",
+        "admin"
+      ]
+    },
+    "public.tour_style": {
+      "name": "tour_style",
+      "schema": "public",
+      "values": [
+        "Walkthrough",
+        "Drone",
+        "Cinematic"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
   "views": {},
   "_meta": {
+    "columns": {},
     "schemas": {},
-    "tables": {},
-    "columns": {}
-  },
-  "internal": {
-    "tables": {},
-    "indexes": {}
+    "tables": {}
   }
 }

@@ -1,17 +1,24 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { integer, pgEnum, pgTable, serial, text, timestamp, varchar } from "drizzle-orm/pg-core";
+
+/**
+ * Postgres enum types. Reused across tables where the same set of values
+ * applies (e.g. tourStyle in both projects and generation_jobs).
+ */
+export const roleEnum = pgEnum("role", ["user", "admin"]);
+export const tourStyleEnum = pgEnum("tour_style", ["Walkthrough", "Drone", "Cinematic"]);
+export const jobStatusEnum = pgEnum("job_status", ["processing", "ready", "failed"]);
+export const authPurposeEnum = pgEnum("auth_purpose", ["signup", "login", "reset"]);
+export const planEnum = pgEnum("plan", ["starter", "pro", "annual", "business"]);
 
 /**
  * Core user table backing auth flow.
  * Extend this file with additional tables as your product grows.
  * Columns use camelCase to match both database fields and generated types.
  */
-export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
-  id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+export const users = pgTable("users", {
+  /** Surrogate primary key (auto-incrementing serial). */
+  id: serial("id").primaryKey(),
+  /** OAuth identifier (openId), or `email_<id>` for email/password accounts. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -23,9 +30,12 @@ export const users = mysqlTable("users", {
   passwordHash: varchar("passwordHash", { length: 255 }),
   /** When the user's email was verified via OTP. Null = unverified. */
   emailVerified: timestamp("emailVerified"),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: roleEnum("role").default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
@@ -37,15 +47,15 @@ export type InsertUser = typeof users.$inferInsert;
  * (never in plaintext). A code is valid until `expiresAt`, has a capped number
  * of verification `attempts`, and is single-use (`consumedAt` set on success).
  */
-export const authCodes = mysqlTable("auth_codes", {
-  id: int("id").autoincrement().primaryKey(),
+export const authCodes = pgTable("auth_codes", {
+  id: serial("id").primaryKey(),
   email: varchar("email", { length: 320 }).notNull(),
   /** SHA-256 hash (hex) of the 6-digit code. */
   codeHash: varchar("codeHash", { length: 128 }).notNull(),
-  purpose: mysqlEnum("purpose", ["signup", "login", "reset"]).notNull(),
+  purpose: authPurposeEnum("purpose").notNull(),
   expiresAt: timestamp("expiresAt").notNull(),
   consumedAt: timestamp("consumedAt"),
-  attempts: int("attempts").default(0).notNull(),
+  attempts: integer("attempts").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -57,20 +67,23 @@ export type InsertAuthCode = typeof authCodes.$inferInsert;
  * Each user gets one "active" project restored on login (the tool state),
  * but the model supports multiple projects for history.
  */
-export const projects = mysqlTable("projects", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull(),
+export const projects = pgTable("projects", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull(),
   name: varchar("name", { length: 255 }).default("My Property Tour").notNull(),
   /** Tour style — labels exactly: Walkthrough, Drone, Cinematic */
-  tourStyle: mysqlEnum("tourStyle", ["Walkthrough", "Drone", "Cinematic"]).default("Walkthrough").notNull(),
+  tourStyle: tourStyleEnum("tourStyle").default("Walkthrough").notNull(),
   /** Optional creative direction text from the user (prompt style) */
   creativeText: text("creativeText"),
   /** Video settings */
   resolution: varchar("resolution", { length: 16 }).default("720p").notNull(),
   aspectRatio: varchar("aspectRatio", { length: 8 }).default("16:9").notNull(),
-  clipDuration: int("clipDuration").default(5).notNull(),
+  clipDuration: integer("clipDuration").default(5).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
 });
 
 export type Project = typeof projects.$inferSelect;
@@ -81,12 +94,12 @@ export type InsertProject = typeof projects.$inferInsert;
  * this index is the single source of truth for photo order and is stored
  * alongside the S3 key so the generation pipeline can never mix up order.
  */
-export const projectImages = mysqlTable("project_images", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  userId: int("userId").notNull(),
+export const projectImages = pgTable("project_images", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull(),
+  userId: integer("userId").notNull(),
   /** 0-based strict ordering index within the project */
-  sequenceIndex: int("sequenceIndex").notNull(),
+  sequenceIndex: integer("sequenceIndex").notNull(),
   /** S3 storage key (the only way to reach the object) */
   fileKey: varchar("fileKey", { length: 512 }).notNull(),
   /** Serving URL (/manus-storage/{key}) */
@@ -106,15 +119,15 @@ export type InsertProjectImage = typeof projectImages.$inferInsert;
  * The optimized prompt (from the hidden LLM analysis step) is stored
  * server-side only and never exposed via any public procedure.
  */
-export const generationJobs = mysqlTable("generation_jobs", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  userId: int("userId").notNull(),
-  status: mysqlEnum("status", ["processing", "ready", "failed"]).default("processing").notNull(),
-  tourStyle: mysqlEnum("tourStyle", ["Walkthrough", "Drone", "Cinematic"]).notNull(),
+export const generationJobs = pgTable("generation_jobs", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull(),
+  userId: integer("userId").notNull(),
+  status: jobStatusEnum("status").default("processing").notNull(),
+  tourStyle: tourStyleEnum("tourStyle").notNull(),
   resolution: varchar("resolution", { length: 16 }).notNull(),
   aspectRatio: varchar("aspectRatio", { length: 8 }).notNull(),
-  clipDuration: int("clipDuration").notNull(),
+  clipDuration: integer("clipDuration").notNull(),
   /** Snapshot of ordered image ids at generation time (JSON array) — order guarantee */
   imageSequence: text("imageSequence"),
   /** Hidden: LLM-optimized prompt sent to Seedance. NEVER exposed to client. */
@@ -127,7 +140,10 @@ export const generationJobs = mysqlTable("generation_jobs", {
   thumbnailUrl: varchar("thumbnailUrl", { length: 768 }),
   errorMessage: text("errorMessage"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
 });
 
 export type GenerationJob = typeof generationJobs.$inferSelect;
@@ -137,16 +153,19 @@ export type InsertGenerationJob = typeof generationJobs.$inferInsert;
  * Stripe subscription state per user. Plans: starter ($9/mo), pro ($39/mo),
  * annual ($29/yr), business ($99/mo).
  */
-export const subscriptions = mysqlTable("subscriptions", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull().unique(),
+export const subscriptions = pgTable("subscriptions", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().unique(),
   stripeCustomerId: varchar("stripeCustomerId", { length: 128 }),
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
-  plan: mysqlEnum("plan", ["starter", "pro", "annual", "business"]),
+  plan: planEnum("plan"),
   status: varchar("status", { length: 32 }).default("inactive").notNull(),
   currentPeriodEnd: timestamp("currentPeriodEnd"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
 });
 
 export type Subscription = typeof subscriptions.$inferSelect;

@@ -1,26 +1,12 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1783985754599,
-      "tag": "0000_third_thor",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1783985964764,
-      "tag": "0001_low_slipstream",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1783993536951,
-      "tag": "0002_married_roughhouse",
+      "version": "7",
+      "when": 1783994954619,
+      "tag": "0000_empty_ultimo",
       "breakpoints": true
     }
   ]

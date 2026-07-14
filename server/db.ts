@@ -1,5 +1,6 @@
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import {
   InsertAuthCode,
   InsertGenerationJob,
@@ -15,12 +16,16 @@ import {
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _client: ReturnType<typeof postgres> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      // `prepare: false` is required for Supabase's transaction pooler (pgBouncer),
+      // which does not support prepared statements. Harmless on a direct connection.
+      _client = postgres(process.env.DATABASE_URL, { prepare: false });
+      _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -79,9 +84,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
+    await db
+      .insert(users)
+      .values(values)
+      .onConflictDoUpdate({
+        target: users.openId,
+        set: updateSet,
+      });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -233,13 +242,8 @@ export async function getOrCreateActiveProject(userId: number) {
     .limit(1);
   if (existing.length > 0) return existing[0];
 
-  const [result] = await db.insert(projects).values({ userId });
-  const created = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, result.insertId))
-    .limit(1);
-  return created[0];
+  const [created] = await db.insert(projects).values({ userId }).returning();
+  return created;
 }
 
 export async function getProjectById(projectId: number, userId: number) {
@@ -278,13 +282,8 @@ export async function updateProjectSettings(
 export async function addProjectImage(image: InsertProjectImage) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [result] = await db.insert(projectImages).values(image);
-  const rows = await db
-    .select()
-    .from(projectImages)
-    .where(eq(projectImages.id, result.insertId))
-    .limit(1);
-  return rows[0];
+  const [row] = await db.insert(projectImages).values(image).returning();
+  return row;
 }
 
 /** Always returned strictly ordered by sequenceIndex. */
@@ -386,13 +385,8 @@ export async function updateImageRoomTag(imageId: number, userId: number, roomTa
 export async function createGenerationJob(job: InsertGenerationJob) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [result] = await db.insert(generationJobs).values(job);
-  const rows = await db
-    .select()
-    .from(generationJobs)
-    .where(eq(generationJobs.id, result.insertId))
-    .limit(1);
-  return rows[0];
+  const [row] = await db.insert(generationJobs).values(job).returning();
+  return row;
 }
 
 export async function getGenerationJob(jobId: number, userId: number) {
