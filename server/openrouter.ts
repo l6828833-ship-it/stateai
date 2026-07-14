@@ -3,8 +3,8 @@
  *
  * Responsible for the VIDEO GENERATION step only:
  *   submitSeedanceVideo() / pollSeedanceJob() / downloadSeedanceVideo(): async
- *   video generation with bytedance/seedance-2.0 via OpenRouter's /videos
- *   endpoint.
+ *   video generation with kwaivgi/kling-v3.0-pro (audio disabled) via
+ *   OpenRouter's /videos endpoint.
  *
  * NOTE: The image-analysis / prompt-optimization step runs through Inworld
  * (see server/inworld.ts), not OpenRouter.
@@ -18,10 +18,10 @@ const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 /**
  * Video (animation) model. Override with the OPENROUTER_VIDEO_MODEL env var.
- * Default: bytedance/seedance-2.0.
+ * Default: kwaivgi/kling-v3.0-pro. Video is always generated without audio.
  */
 function getVideoModel(): string {
-  return process.env.OPENROUTER_VIDEO_MODEL || "bytedance/seedance-2.0";
+  return process.env.OPENROUTER_VIDEO_MODEL || "kwaivgi/kling-v3.0-pro";
 }
 
 function getApiKey(): string {
@@ -46,8 +46,9 @@ export interface SeedanceSubmitResult {
 }
 
 /**
- * Submit a Seedance 2.0 video generation job. Reference images are passed in
- * strict sequence order via input_references.
+ * Submit a video generation job (default model: kwaivgi/kling-v3.0-pro).
+ * Reference images are passed in strict sequence order via input_references,
+ * and `generate_audio: false` ensures the output has no audio track.
  */
 export async function submitSeedanceVideo(params: {
   prompt: string;
@@ -84,14 +85,14 @@ export async function submitSeedanceVideo(params: {
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Seedance submission failed (${resp.status}): ${text}`);
+    throw new Error(`Video submission failed (${resp.status}): ${text}`);
   }
 
   const job = (await resp.json()) as {
     id: string;
     polling_url?: string;
   };
-  if (!job.id) throw new Error("Seedance submission returned no job id");
+  if (!job.id) throw new Error("Video submission returned no job id");
   return { jobId: job.id, pollingUrl: job.polling_url ?? null };
 }
 
@@ -117,7 +118,7 @@ export async function pollSeedanceJob(jobId: string): Promise<SeedancePollResult
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Seedance poll failed (${resp.status}): ${text}`);
+    throw new Error(`Video poll failed (${resp.status}): ${text}`);
   }
 
   const data = (await resp.json()) as {
