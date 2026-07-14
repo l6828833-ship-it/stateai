@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +19,38 @@ import { toast } from "sonner";
 type Mode = "signin" | "signup" | "verify";
 type VerifyPurpose = "signup" | "login";
 
+/** Multi-color Google "G" logo. */
+function GoogleIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M23.52 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.88c2.27-2.09 3.57-5.17 3.57-8.87z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.96-1.08 7.95-2.91l-3.88-3c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09A12 12 0 0 0 12 24z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.27 14.28a7.2 7.2 0 0 1 0-4.56V6.63H1.29a12 12 0 0 0 0 10.74l3.98-3.09z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.29 6.63l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"
+      />
+    </svg>
+  );
+}
+
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  google_not_configured: "Google sign-in isn't configured yet. Please use email instead.",
+  google_state: "Google sign-in expired or was interrupted. Please try again.",
+  google_token: "Couldn't complete Google sign-in. Please try again.",
+  google_userinfo: "Couldn't read your Google profile. Please try again.",
+  google: "Google sign-in failed. Please try again.",
+};
+
 export default function Auth({ initialMode = "signin" }: { initialMode?: Mode }) {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
@@ -36,6 +67,17 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
 
   useEffect(() => setMode(initialMode), [initialMode]);
   useEffect(() => setError(null), [mode]);
+
+  // Surface errors bounced back from the Google OAuth callback (?error=...).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get("error");
+    if (err) {
+      toast.error(AUTH_ERROR_MESSAGES[err] ?? "Sign-in failed. Please try again.");
+      // Clean the URL so the toast doesn't reappear on refresh.
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   // Resend cooldown ticker.
   useEffect(() => {
@@ -300,10 +342,12 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
               </div>
               <Button
                 variant="outline"
-                onClick={() => startLogin()}
-                className="btn-springy w-full rounded-full bg-card/60 py-6 text-base"
+                onClick={() => {
+                  window.location.href = "/api/auth/google";
+                }}
+                className="btn-springy w-full gap-2 rounded-full bg-card/60 py-6 text-base"
               >
-                Continue with Manus
+                <GoogleIcon /> Continue with Google
               </Button>
 
               <p className="mt-6 text-center text-sm text-muted-foreground">

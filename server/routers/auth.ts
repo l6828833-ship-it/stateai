@@ -36,7 +36,8 @@ function sanitizeUser(user: User) {
 /** Sign a session JWT and set it as the httpOnly session cookie. */
 async function establishSession(ctx: TrpcContext, user: User) {
   const token = await sdk.createSessionToken(user.openId, {
-    name: user.name || "",
+    // Must be non-empty: verifySession rejects sessions with a blank name.
+    name: user.name || user.email || "User",
     expiresInMs: ONE_YEAR_MS,
   });
   ctx.res.cookie(COOKIE_NAME, token, {
