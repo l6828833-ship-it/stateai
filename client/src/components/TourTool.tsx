@@ -1,32 +1,26 @@
 import { useCallback, useRef, useState } from "react";
-import {
-  ASPECT_RATIOS,
-  MAX_IMAGES,
-  TOUR_STYLES,
-  type TourStyleId,
-} from "@shared/plans";
+import { ASPECT_RATIOS, MAX_IMAGES } from "@shared/plans";
 import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import {
   Brain,
   Camera,
   Check,
   Clapperboard,
-  Clock,
-  Footprints,
+  Film,
   GripVertical,
   ImagePlus,
   Loader2,
-  MonitorPlay,
-  Plane,
+  Monitor,
+  RectangleHorizontal,
+  Smartphone,
+  Square,
   Trash2,
-  Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -41,7 +35,6 @@ export interface ToolImage {
 }
 
 export interface ToolSettings {
-  tourStyle: TourStyleId;
   aspectRatio: string;
 }
 
@@ -58,10 +51,16 @@ interface TourToolProps {
   disabled?: boolean;
 }
 
-const STYLE_META: Record<TourStyleId, { icon: typeof Footprints; blurb: string }> = {
-  Walkthrough: { icon: Footprints, blurb: "Glide room to room, first-person" },
-  Drone: { icon: Plane, blurb: "Sweeping aerial reveals & orbits" },
-  Cinematic: { icon: Clapperboard, blurb: "Film-grade moves & golden light" },
+/** Each aspect ratio gets an icon + plain-language purpose so users know what it's for. */
+const ASPECT_META: Record<
+  string,
+  { icon: typeof Monitor; name: string; hint: string }
+> = {
+  "16:9": { icon: Monitor, name: "Widescreen", hint: "YouTube, websites & landscape" },
+  "9:16": { icon: Smartphone, name: "Vertical", hint: "Reels, TikTok & Stories" },
+  "1:1": { icon: Square, name: "Square", hint: "Instagram feed posts" },
+  "4:3": { icon: RectangleHorizontal, name: "Classic", hint: "Standard photo frame" },
+  "21:9": { icon: Film, name: "Cinematic", hint: "Ultra-wide film look" },
 };
 
 export default function TourTool({
@@ -206,15 +205,19 @@ export default function TourTool({
       {/* Photo sequence timeline */}
       {images.length > 0 && (
         <div>
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-1 flex items-center justify-between">
             <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
               <Camera className="h-4 w-4 text-primary" />
-              Tour sequence — drag to set the exact order
+              Play order — the video follows this exact sequence
             </h3>
             <span className="text-xs text-muted-foreground">
               {images.length}/{MAX_IMAGES} photos
             </span>
           </div>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Image 1 plays first, then Image 2, and so on — e.g. put the exterior first, then the
+            living room, kitchen, and more. Drag or use ← → to arrange.
+          </p>
           <div className="flex gap-3 overflow-x-auto pb-3 pt-1" role="list" aria-label="Photo order">
             {images.map((img, index) => (
               <div
@@ -263,10 +266,13 @@ export default function TourTool({
                     <GripVertical className="h-4 w-4 text-white drop-shadow" />
                   </div>
                 </div>
-                {/* Room tag + move buttons */}
+                {/* Image label + move buttons */}
                 <div className="mt-1.5 flex items-center justify-between gap-1">
-                  <span className="truncate rounded-full bg-accent px-2 py-0.5 text-[10px] text-accent-foreground">
-                    {img.roomTag || img.fileName.replace(/\.[^.]+$/, "").slice(0, 14)}
+                  <span
+                    className="truncate rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground"
+                    title={img.roomTag || img.fileName}
+                  >
+                    Image {index + 1}
                   </span>
                   <span className="flex gap-0.5">
                     <button
@@ -295,85 +301,55 @@ export default function TourTool({
         </div>
       )}
 
-      {/* Tour style selector */}
+      {/* Aspect ratio — the only choice; each option is labeled with its purpose */}
       <div>
-        <h3 className="mb-3 text-sm font-medium text-foreground flex items-center gap-2">
-          <Wand2 className="h-4 w-4 text-primary" />
-          Tour style
-        </h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {TOUR_STYLES.map((style) => {
-            const Meta = STYLE_META[style];
-            const active = settings.tourStyle === style;
-            return (
-              <button
-                key={style}
-                type="button"
-                onClick={() => onSettingsChange({ tourStyle: style })}
-                className={cn(
-                  "btn-springy rounded-xl border p-4 text-left transition-colors",
-                  active
-                    ? "border-primary bg-accent/70 pink-glow"
-                    : "border-border bg-card/70 hover:border-ring",
-                )}
-                aria-pressed={active}
-              >
-                <Meta.icon className={cn("mb-2 h-5 w-5", active ? "text-primary" : "text-muted-foreground")} />
-                <p className="font-medium text-sm">{style}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{Meta.blurb}</p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Output settings */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Aspect ratio</label>
-          <Select
-            value={settings.aspectRatio}
-            onValueChange={(v) => onSettingsChange({ aspectRatio: v })}
-          >
-            <SelectTrigger className="rounded-xl bg-card/70">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ASPECT_RATIOS.map((a) => (
+        <label className="mb-1.5 block text-sm font-medium text-foreground">
+          Aspect ratio <span className="font-normal text-muted-foreground">— where you'll share it</span>
+        </label>
+        <Select
+          value={settings.aspectRatio}
+          onValueChange={(v) => onSettingsChange({ aspectRatio: v })}
+        >
+          <SelectTrigger className="rounded-xl bg-card/70">
+            {(() => {
+              const meta = ASPECT_META[settings.aspectRatio] ?? ASPECT_META["16:9"];
+              const Icon = meta.icon;
+              return (
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 text-primary" />
+                  <span className="font-medium">{settings.aspectRatio}</span>
+                  <span className="text-xs text-muted-foreground">· {meta.name}</span>
+                </span>
+              );
+            })()}
+          </SelectTrigger>
+          <SelectContent>
+            {ASPECT_RATIOS.map((a) => {
+              const meta = ASPECT_META[a];
+              const Icon = meta?.icon ?? Monitor;
+              return (
                 <SelectItem key={a} value={a}>
-                  {a}
+                  <Icon className="h-4 w-4 text-primary" />
+                  <span className="font-medium">{a}</span>
+                  <span className="text-xs text-muted-foreground">
+                    · {meta?.name} — {meta?.hint}
+                  </span>
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {/* Resolution — fixed at 1080p */}
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Resolution</label>
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-card/70 px-3 py-2.5 text-sm text-foreground">
-            <MonitorPlay className="h-4 w-4 text-primary" />
-            <span className="font-medium">1080p</span>
-            <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">Full HD</span>
-          </div>
-        </div>
-        {/* Video length — chosen by AI */}
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Video length</label>
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-card/70 px-3 py-2.5 text-sm text-foreground">
-            <Clock className="h-4 w-4 text-primary" />
-            <span className="font-medium">Auto</span>
-            <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">AI-timed</span>
-          </div>
-        </div>
+              );
+            })}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* AI direction note */}
       <div className="flex items-start gap-2.5 rounded-xl border border-primary/15 bg-accent/40 px-4 py-3 text-xs text-muted-foreground">
         <Brain className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <p>
-          Our AI studies your photos to direct the ideal camera movement and picks the perfect
-          length automatically (up to 15s). Every tour renders in crisp 1080p with your original
-          photos kept pixel-perfect — no cropping, no quality loss.
+          Just set the order and aspect ratio — our AI does the rest. It studies each photo, picks
+          the best cinematic style and camera move for every shot (aerial reveals for exteriors,
+          smooth glides inside rooms), and chooses the perfect length automatically (up to 15s).
+          Every tour renders in crisp 1080p with your original photos kept pixel-perfect — no
+          cropping, no quality loss.
         </p>
       </div>
 
