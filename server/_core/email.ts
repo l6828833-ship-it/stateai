@@ -1,20 +1,27 @@
 import { createHash, randomInt } from "node:crypto";
 
 /**
- * Email delivery with a pluggable provider.
+ * Email delivery via Brevo (https://www.brevo.com), formerly Sendinblue.
  *
- * - If `RESEND_API_KEY` is set, real emails are sent via the Resend HTTP API
- *   (https://resend.com) using `EMAIL_FROM` as the sender.
+ * - If `BREVO_API_KEY` is set, real emails are sent through the Brevo
+ *   transactional email API (POST /v3/smtp/email) using the sender parsed from
+ *   `EMAIL_FROM` (or `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME`).
  * - Otherwise (local dev / provider not configured), the email is logged to the
  *   server console so the auth flow remains fully testable. The 6-digit code
  *   prints in the logs.
  *
  * To send real emails in production, set:
- *   RESEND_API_KEY=re_xxx
+ *   BREVO_API_KEY=xkeysib-xxx
  *   EMAIL_FROM="EstateTour AI <no-reply@yourdomain.com>"
+ *   # or, alternatively:
+ *   # BREVO_SENDER_EMAIL=no-reply@yourdomain.com
+ *   # BREVO_SENDER_NAME="EstateTour AI"
+ *
+ * Note: the sender email/domain must be a verified sender in your Brevo account.
  */
 
 const OTP_TTL_MINUTES = 10;
+const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 
 export type SendEmailInput = {
   to: string;
@@ -23,42 +30,67 @@ export type SendEmailInput = {
   text: string;
 };
 
+/**
+ * Resolve the sender name/email from env. Accepts either the combined
+ * `EMAIL_FROM` "Name <email@domain>" format or the discrete
+ * `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` variables.
+ */
+function resolveSender(): { name: string; email: string } {
+  const combined = process.env.EMAIL_FROM;
+  if (combined) {
+    const match = combined.match(/^\s*(.*?)\s*<\s*([^>]+)\s*>\s*$/);
+    if (match) {
+      return { name: match[1] || "EstateTour AI", email: match[2] };
+    }
+    // Bare email with no display name.
+    if (combined.includes("@")) {
+      return { name: "EstateTour AI", email: combined.trim() };
+    }
+  }
+  return {
+    name: process.env.BREVO_SENDER_NAME || "EstateTour AI",
+    email: process.env.BREVO_SENDER_EMAIL || "no-reply@estatetour.ai",
+  };
+}
+
 /** Returns true when the message was accepted (or logged in dev). */
 export async function sendEmail(input: SendEmailInput): Promise<boolean> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM || "EstateTour AI <onboarding@resend.dev>";
+  const apiKey = process.env.BREVO_API_KEY;
 
   if (!apiKey) {
     console.log(
-      `\n[email:dev] (RESEND_API_KEY not set — logging instead of sending)\n` +
+      `\n[email:dev] (BREVO_API_KEY not set — logging instead of sending)\n` +
         `  To: ${input.to}\n  Subject: ${input.subject}\n  ${input.text}\n`,
     );
     return true;
   }
 
+  const sender = resolveSender();
+
   try {
-    const res = await fetch("https://api.resend.com/emails", {
+    const res = await fetch(BREVO_ENDPOINT, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+        "api-key": apiKey,
+        accept: "application/json",
+        "content-type": "application/json",
       },
       body: JSON.stringify({
-        from,
-        to: [input.to],
+        sender,
+        to: [{ email: input.to }],
         subject: input.subject,
-        html: input.html,
-        text: input.text,
+        htmlContent: input.html,
+        textContent: input.text,
       }),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.warn(`[email] Resend failed (${res.status} ${res.statusText}): ${detail}`);
+      console.warn(`[email] Brevo failed (${res.status} ${res.statusText}): ${detail}`);
       return false;
     }
     return true;
   } catch (error) {
-    console.warn("[email] Error sending via Resend:", error);
+    console.warn("[email] Error sending via Brevo:", error);
     return false;
   }
 }
