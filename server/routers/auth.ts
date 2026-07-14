@@ -36,7 +36,8 @@ function sanitizeUser(user: User) {
 /** Sign a session JWT and set it as the httpOnly session cookie. */
 async function establishSession(ctx: TrpcContext, user: User) {
   const token = await sdk.createSessionToken(user.openId, {
-    name: user.name || "",
+    // Must be non-empty: verifySession rejects sessions with a blank name.
+    name: user.name || user.email || "User",
     expiresInMs: ONE_YEAR_MS,
   });
   ctx.res.cookie(COOKIE_NAME, token, {
@@ -55,7 +56,27 @@ async function issueCode(email: string, purpose: "signup" | "login") {
     purpose,
     expiresAt: otpExpiryDate(),
   });
-  await sendOtpEmail(email, code, purpose);
+
+  const result = await sendOtpEmail(email, code, purpose);
+  if (!result.ok) {
+    // Surface the real provider error instead of pretending the code was sent.
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `We couldn't send the verification email. ${result.error ?? "Please try again shortly."}`,
+    });
+  }
+  if (result.skipped) {
+    // Email provider not configured — fail loudly in production so users aren't
+    // stuck waiting for a code that will never arrive.
+    if (process.env.NODE_ENV === "production") {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message:
+          "Email delivery is not configured (BREVO_API_KEY is missing). Please contact support.",
+      });
+    }
+    console.warn(`[auth] DEV ONLY — OTP for ${email} (${purpose}): ${code}`);
+  }
 }
 
 export const authRouter = router({
@@ -192,17 +213,31 @@ export const authRouter = router({
         });
       }
 
-      await db.consumeAuthCode(record.id);
-
       const user = await db.getUserByEmail(input.email);
       if (!user) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Account not found." });
       }
 
+      // Sign the session BEFORE consuming the code. If signing fails (e.g.
+      // JWT_SECRET is missing), the code stays valid so the user can retry
+      // once the server is configured, rather than burning a correct code.
+      try {
+        await establishSession(ctx, user);
+      } catch (e) {
+        console.error("[auth] Failed to create session token:", e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            e instanceof Error && e.message.includes("JWT_SECRET")
+              ? e.message
+              : "Could not create your session. Please try again shortly.",
+        });
+      }
+
       if (!user.emailVerified) {
         await db.markEmailVerified(user.id);
       }
-      await establishSession(ctx, user);
+      await db.consumeAuthCode(record.id);
 
       const fresh = (await db.getUserByEmail(input.email)) ?? user;
       return { ok: true, user: sanitizeUser(fresh) } as const;

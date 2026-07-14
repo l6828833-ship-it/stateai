@@ -155,6 +155,13 @@ class SDKServer {
 
   private getSessionSecret() {
     const secret = ENV.cookieSecret;
+    if (!secret || secret.trim().length === 0) {
+      // Without a signing secret, jose throws the cryptic "Zero-length key is
+      // not supported". Fail with an actionable message instead.
+      throw new Error(
+        "JWT_SECRET is not configured. Set the JWT_SECRET environment variable to a long random string (e.g. `openssl rand -hex 32`) so session tokens can be signed.",
+      );
+    }
     return new TextEncoder().encode(secret);
   }
 

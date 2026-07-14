@@ -1,5 +1,8 @@
 export const ENV = {
-  appId: process.env.VITE_APP_ID ?? "",
+  // Falls back to a stable app identifier so session JWTs always carry a
+  // non-empty appId (required by verifySession) even when VITE_APP_ID is unset
+  // in self-hosted / non-Manus deployments.
+  appId: process.env.VITE_APP_ID || "estatetour-ai",
   cookieSecret: process.env.JWT_SECRET ?? "",
   databaseUrl: process.env.DATABASE_URL ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
