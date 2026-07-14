@@ -15,6 +15,7 @@ import {
   Eye,
   Layers,
   ListOrdered,
+  Play,
   Sparkles,
   Star,
   TrendingUp,
@@ -48,43 +49,91 @@ function useReveal() {
   }, []);
 }
 
+const HERO_ROOMS = [
+  { src: HERO_IMG_1, label: "Living room" },
+  { src: HERO_IMG_2, label: "Kitchen" },
+  { src: HERO_IMG_3, label: "Aerial view" },
+];
+
 /** Hero preview card that crossfades between room shots with ken-burns motion */
 function HeroPreview() {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setFrame((f) => (f + 1) % 3), 4500);
+    const t = setInterval(() => setFrame((f) => (f + 1) % HERO_ROOMS.length), 4500);
     return () => clearInterval(t);
   }, []);
-  const imgs = [HERO_IMG_1, HERO_IMG_2, HERO_IMG_3];
+  const current = HERO_ROOMS[frame];
+  const next = HERO_ROOMS[(frame + 1) % HERO_ROOMS.length];
+
   return (
-    <div className="glass-panel relative overflow-hidden rounded-3xl p-2 sm:p-3">
-      <div className="relative aspect-video overflow-hidden rounded-2xl">
-        {imgs.map((src, i) => (
-          <img
-            key={src}
-            src={src}
-            alt="AI house tour preview"
-            className={cn(
-              "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
-              i === frame ? "opacity-100 animate-ken-burns" : "opacity-0",
-            )}
-          />
-        ))}
-        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/50 to-transparent p-3">
-          <span className="flex items-center gap-1.5 text-xs font-medium text-white">
-            <Clapperboard className="h-3.5 w-3.5" /> AI Tour Preview
-          </span>
-          <span className="flex gap-1">
-            {imgs.map((_, i) => (
-              <span
-                key={i}
-                className={cn(
-                  "h-1.5 rounded-full transition-all duration-500",
-                  i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50",
-                )}
-              />
-            ))}
-          </span>
+    <div className="relative">
+      {/* Floating "render time" chip */}
+      <div className="glass-panel animate-chip-float absolute -left-3 -top-5 z-20 flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-foreground shadow-lg sm:-left-6">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-dot-pulse absolute inline-flex h-2 w-2 rounded-full bg-primary" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+        </span>
+        Rendered in ~2 minutes
+      </div>
+
+      {/* Floating "4K ready" chip */}
+      <div
+        className="glass-panel animate-float-soft absolute -bottom-4 -right-2 z-20 flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium text-foreground shadow-lg sm:-right-6"
+        style={{ animationDelay: "1.2s" }}
+      >
+        <Sparkles className="h-3.5 w-3.5 text-primary" />
+        Cinematic 1080p
+      </div>
+
+      <div className="glass-panel relative overflow-hidden rounded-3xl p-2 sm:p-3">
+        <div className="relative aspect-video overflow-hidden rounded-2xl bg-muted">
+          {HERO_ROOMS.map((room, i) => (
+            <img
+              key={room.src}
+              src={room.src}
+              alt={`AI house tour preview — ${room.label}`}
+              className={cn(
+                "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
+                i === frame ? "opacity-100 animate-ken-burns" : "opacity-0",
+              )}
+            />
+          ))}
+
+          {/* Top overlay: live recording badge */}
+          <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
+            <span className="flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+              AI Tour Preview
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+              <Play className="h-3 w-3 fill-white" /> Auto
+            </span>
+          </div>
+
+          {/* Bottom overlay: room transition caption + scrubber */}
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
+            <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-white">
+              <span className="flex items-center gap-1.5">
+                <Clapperboard className="h-3.5 w-3.5" />
+                {current.label} <ArrowRight className="h-3 w-3 opacity-70" /> {next.label}
+              </span>
+              <span className="flex gap-1">
+                {HERO_ROOMS.map((_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1.5 rounded-full transition-all duration-500",
+                      i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50",
+                    )}
+                  />
+                ))}
+              </span>
+            </div>
+            {/* Scrub track */}
+            <div className="relative h-1 w-full overflow-hidden rounded-full bg-white/25">
+              <div className="animate-scrub absolute inset-y-0 w-2/5 rounded-full bg-gradient-to-r from-[#F7B8D0] to-[#E894B5]" />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -258,19 +307,26 @@ export default function Home() {
 
         <div className="container relative grid items-center gap-12 lg:grid-cols-2">
           <div>
-            <span className="animate-fade-up inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
-              <Sparkles className="h-3.5 w-3.5 text-primary" /> AI video for real estate
-            </span>
-            <h1 className="animate-fade-up-delay-1 mt-5 font-display text-4xl leading-tight text-foreground sm:text-5xl lg:text-[3.4rem]">
-              Your listing photos,{" "}
-              <span className="bg-gradient-to-r from-[#E894B5] to-[#c98ad6] bg-clip-text text-transparent">
-                reborn as cinema
+            <span className="animate-fade-up inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-accent/80 px-3 py-1 text-xs font-medium text-accent-foreground backdrop-blur-sm">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-dot-pulse absolute inline-flex h-2 w-2 rounded-full bg-primary" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
               </span>
+              AI video for real estate
+            </span>
+            <h1 className="animate-fade-up-delay-1 mt-5 font-display text-4xl leading-[1.08] text-foreground sm:text-5xl lg:text-[3.6rem]">
+              Photos in.
+              <br />
+              A{" "}
+              <span className="animate-text-sheen bg-gradient-to-r from-[#E894B5] via-[#c98ad6] to-[#E894B5] bg-clip-text text-transparent">
+                cinematic tour
+              </span>{" "}
+              out.
             </h1>
             <p className="animate-fade-up-delay-2 mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Upload the photos you already have. Our AI walks buyers through every room,
-              lifts them over the rooftop, and delivers a broadcast-quality tour video —
-              in minutes, not days. No drone pilot. No film crew. No editing suite.
+              Upload the listing photos you already have. Our AI walks buyers through every
+              room and lifts them over the rooftop — a broadcast-quality tour video in minutes,
+              not days. No drone pilot, no film crew, no editing suite.
             </p>
             <div className="animate-fade-up-delay-3 mt-8 flex flex-wrap items-center gap-4">
               <Button
@@ -280,9 +336,43 @@ export default function Home() {
               >
                 Create my tour video <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
-              <span className="text-sm text-muted-foreground">
-                Free to try · no credit card to start
-              </span>
+              <button
+                onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+                className="btn-springy group inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-medium text-foreground/80 transition-colors hover:text-primary"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent group-hover:bg-primary/15">
+                  <Play className="h-3.5 w-3.5 fill-primary text-primary" />
+                </span>
+                See how it works
+              </button>
+            </div>
+
+            {/* Trust indicators */}
+            <div className="animate-fade-up-delay-3 mt-9 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <div className="flex items-center gap-2">
+                <div className="flex -space-x-2">
+                  {["#E894B5", "#c98ad6", "#F7B8D0", "#D9C4F2"].map((c, i) => (
+                    <span
+                      key={i}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold text-white"
+                      style={{ background: c }}
+                    >
+                      {["S", "M", "J", "K"][i]}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex flex-col leading-tight">
+                  <span className="flex items-center gap-1 text-sm font-medium text-foreground">
+                    <Star className="h-3.5 w-3.5 fill-primary text-primary" /> 4.9/5
+                  </span>
+                  <span className="text-xs text-muted-foreground">from 600+ agents</span>
+                </div>
+              </div>
+              <div className="hidden h-8 w-px bg-border sm:block" />
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <CheckCircle2 className="h-4 w-4 text-primary" />
+                Free to try · no card required
+              </div>
             </div>
           </div>
 

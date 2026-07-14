@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
@@ -14,6 +13,8 @@ import { loadDraft, clearDraft } from "@/hooks/useToolDraft";
 import type { PlanId, TourStyleId } from "@shared/plans";
 import {
   BadgeCheck,
+  BarChart3,
+  CheckCircle2,
   Clapperboard,
   CreditCard,
   Crown,
@@ -21,14 +22,16 @@ import {
   Film,
   History,
   Loader2,
-  LogOut,
   Menu,
   RefreshCw,
-  Zap,
+  Sparkles,
+  TrendingUp,
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+
+type DashSection = "create" | "videos" | "analytics";
 
 function StatusBadge({ status }: { status: "processing" | "ready" | "failed" }) {
   return (
@@ -49,8 +52,7 @@ function StatusBadge({ status }: { status: "processing" | "ready" | "failed" }) 
 }
 
 export default function Dashboard() {
-  const { user, loading: authLoading, isAuthenticated, logout } = useAuth();
-  const [, navigate] = useLocation();
+  const { user, loading: authLoading, isAuthenticated } = useAuth();
   const utils = trpc.useUtils();
 
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("idle");
@@ -58,6 +60,7 @@ export default function Dashboard() {
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [draftSyncing, setDraftSyncing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<DashSection>("create");
   const draftSyncedRef = useRef(false);
 
   const stateQuery = trpc.tour.getState.useQuery(undefined, {
@@ -319,6 +322,19 @@ export default function Dashboard() {
     }
   };
 
+  const goToSection = (section: string) => {
+    setActiveSection(section as DashSection);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleCreateClick = () => {
+    setActiveSection("create");
+    setTimeout(
+      () => document.getElementById("tour-tool")?.scrollIntoView({ behavior: "smooth" }),
+      50,
+    );
+  };
+
   // ===== Render =====
   if (authLoading || (isAuthenticated && stateQuery.isLoading)) {
     return (
@@ -347,216 +363,347 @@ export default function Dashboard() {
 
   const firstImageUrl = toolImages[0]?.previewUrl ?? null;
   const jobs = jobsQuery.data ?? [];
+  const readyCount = jobs.filter((j) => j.status === "ready").length;
+  const processingCount = jobs.filter((j) => j.status === "processing").length;
+
+  const sectionTitle =
+    activeSection === "videos"
+      ? "Your videos"
+      : activeSection === "analytics"
+        ? "Analytics"
+        : `Welcome back${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`;
+  const sectionSubtitle =
+    activeSection === "videos"
+      ? "Every tour you've generated, ready to download and share."
+      : activeSection === "analytics"
+        ? "A quick look at your studio activity."
+        : "Your studio is exactly as you left it — photos, order, and settings included.";
+
+  const HistoryList = () => (
+    <>
+      {jobs.length === 0 ? (
+        <div className="rounded-2xl border border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
+          No videos yet — your generation history will live here.
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {jobs.map((job) => (
+            <li
+              key={job.id}
+              className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
+            >
+              <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg bg-muted">
+                {job.thumbnailUrl ? (
+                  <img
+                    src={job.thumbnailUrl}
+                    alt="Tour thumbnail"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center">
+                    <Film className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">
+                  {job.tourStyle} tour · {job.resolution}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {new Date(job.createdAt).toLocaleString()}
+                </p>
+                <div className="mt-1">
+                  <StatusBadge status={job.status as "processing" | "ready" | "failed"} />
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col gap-1.5">
+                {job.status === "ready" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
+                    onClick={() => (subscribed ? handleDownload(job.id) : setPricingOpen(true))}
+                  >
+                    <Download className="mr-1 h-3 w-3" /> Get
+                  </Button>
+                )}
+                {job.status === "processing" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                    onClick={() => {
+                      setActiveJobId(job.id);
+                      setTheaterMode("real");
+                      setActiveSection("create");
+                    }}
+                  >
+                    <RefreshCw className="mr-1 h-3 w-3" /> View
+                  </Button>
+                )}
+                {job.status === "failed" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                    onClick={handleGenerate}
+                  >
+                    <RefreshCw className="mr-1 h-3 w-3" /> Retry
+                  </Button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 
   return (
-    <div className="min-h-screen">
-      {/* ===== Top bar ===== */}
-      <header className="sticky top-0 z-40">
-        <div className="container flex h-16 items-center justify-between">
-          <a href="/" className="flex items-center gap-2 font-display text-lg text-foreground">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <Clapperboard className="h-4 w-4" />
+    <div className="relative flex min-h-screen">
+      {/* ===== Sidebar (persistent on desktop, drawer on mobile) ===== */}
+      <DashboardSidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        currentPlan={currentPlan}
+        subscribed={subscribed}
+        activeSection={activeSection}
+        onNavigate={goToSection}
+        onUpgradeClick={() => setPricingOpen(true)}
+        onBillingClick={handleOpenBillingPortal}
+      />
+
+      {/* ===== Main column ===== */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Mobile top bar */}
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/60 bg-background/80 px-3 backdrop-blur-xl lg:hidden">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="rounded-lg p-2 text-foreground hover:bg-muted"
+            aria-label="Open menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <a href="/" className="flex items-center gap-2 font-display text-base text-foreground">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Clapperboard className="h-3.5 w-3.5" />
             </span>
-            EstateTour AI
+            EstateTour
           </a>
-          <div className="flex items-center gap-2">
-            {subscribed ? (
-              <span className="hidden items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground sm:inline-flex">
-                <Crown className="h-3.5 w-3.5 text-primary" />
-                {currentPlan ? currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1) : "Active"} plan
-              </span>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                className="btn-springy rounded-full bg-card"
-                onClick={() => setPricingOpen(true)}
-              >
-                <Crown className="mr-1.5 h-3.5 w-3.5 text-primary" /> Upgrade
-              </Button>
-            )}
-            {subscribed && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="btn-springy rounded-full"
-                onClick={handleOpenBillingPortal}
-              >
-                <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Billing
-              </Button>
-            )}
+          {subscribed ? (
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-primary">
+              <Crown className="h-4 w-4" />
+            </span>
+          ) : (
             <Button
               size="sm"
               variant="ghost"
-              className="btn-springy rounded-full text-muted-foreground"
-              onClick={() => logout().then(() => navigate("/"))}
+              className="btn-springy rounded-full px-2 text-primary"
+              onClick={() => setPricingOpen(true)}
             >
-              <LogOut className="h-3.5 w-3.5" />
+              <Crown className="h-4 w-4" />
             </Button>
-          </div>
-        </div>
-        <div className="glass-panel absolute inset-0 -z-10 rounded-none border-x-0 border-t-0" />
-      </header>
+          )}
+        </header>
 
-      <main className="container pb-24 pt-10">
-        <div className="mb-8">
-          <h1 className="font-display text-2xl text-foreground sm:text-3xl">
-            Welcome back{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your studio is exactly as you left it — photos, order, and settings included.
-          </p>
-        </div>
-
-        {draftSyncing && (
-          <div className="mb-6 flex items-center gap-3 rounded-2xl border border-ring/50 bg-accent/40 p-4 text-sm text-accent-foreground">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            Restoring the photos and settings you prepared on the homepage…
-          </div>
-        )}
-
-        <div className="grid gap-8 lg:grid-cols-[1fr_minmax(20rem,26rem)]">
-          {/* ===== The tool ===== */}
-          <section className="glass-panel rounded-3xl p-6 sm:p-8">
-            <TourTool
-              images={toolImages}
-              settings={settings}
-              onFilesAdded={handleFilesAdded}
-              onReorder={handleReorder}
-              onDelete={handleDelete}
-              onSettingsChange={handleSettingsChange}
-              onGenerate={handleGenerate}
-              generateLabel={subscribed ? "Generate Tour Video" : "Generate Tour Video"}
-              generating={generateMutation.isPending || (theaterMode === "real" && activeJob?.status === "processing")}
-              disabled={draftSyncing}
-            />
-          </section>
-
-          {/* ===== Output + history column ===== */}
-          <div className="space-y-6">
-            {/* Output theater */}
-            <section id="output-theater">
-              <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-                <Film className="h-4 w-4 text-primary" /> Output
-              </h2>
-              {theaterMode === "idle" ? (
-                <div className="flex aspect-video flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-ring/50 bg-card/50 p-6 text-center">
-                  <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent">
-                    <Clapperboard className="h-5 w-5 text-primary" />
+        <main className="flex-1 px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">
+          {/* Section header */}
+          <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 className="font-display text-2xl text-foreground sm:text-3xl">{sectionTitle}</h1>
+              <p className="mt-1 text-sm text-muted-foreground">{sectionSubtitle}</p>
+            </div>
+            {/* Desktop plan actions */}
+            <div className="hidden items-center gap-2 lg:flex">
+              {subscribed ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
+                    <Crown className="h-3.5 w-3.5 text-primary" />
+                    {currentPlan
+                      ? currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)
+                      : "Active"}{" "}
+                    plan
                   </span>
-                  <p className="text-sm text-muted-foreground">
-                    Your generated tour will appear here
-                  </p>
-                </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="btn-springy rounded-full"
+                    onClick={handleOpenBillingPortal}
+                  >
+                    <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Billing
+                  </Button>
+                </>
               ) : (
-                <GenerationTheater
-                  mode={theaterMode}
-                  previewImageUrl={firstImageUrl}
-                  jobStatus={theaterMode === "real" ? ((activeJob?.status ?? "processing") as "processing" | "ready" | "failed") : null}
-                  videoUrl={activeJob?.videoUrl ?? null}
-                  errorMessage={activeJob?.errorMessage ?? null}
-                  onFakeComplete={() => {
-                    // Blurred preview appears first; pricing pops over it a beat later.
-                    setTimeout(() => setPricingOpen(true), 900);
-                  }}
-                  onUnlockClick={() => setPricingOpen(true)}
-                  onDownload={() => activeJobId && handleDownload(activeJobId)}
-                />
+                <Button
+                  size="sm"
+                  className="btn-springy rounded-full"
+                  onClick={() => setPricingOpen(true)}
+                >
+                  <Crown className="mr-1.5 h-3.5 w-3.5" /> Upgrade
+                </Button>
               )}
-            </section>
-
-            {/* History */}
-            <section>
-              <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-                <History className="h-4 w-4 text-primary" /> Your videos
-              </h2>
-              {jobs.length === 0 ? (
-                <div className="rounded-2xl border border-border bg-card/50 p-5 text-center text-sm text-muted-foreground">
-                  No videos yet — your generation history will live here.
-                </div>
-              ) : (
-                <ul className="space-y-3">
-                  {jobs.map((job) => (
-                    <li
-                      key={job.id}
-                      className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
-                    >
-                      <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg bg-muted">
-                        {job.thumbnailUrl ? (
-                          <img
-                            src={job.thumbnailUrl}
-                            alt="Tour thumbnail"
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <Film className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {job.tourStyle} tour · {job.resolution}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {new Date(job.createdAt).toLocaleString()}
-                        </p>
-                        <div className="mt-1">
-                          <StatusBadge status={job.status as "processing" | "ready" | "failed"} />
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 flex-col gap-1.5">
-                        {job.status === "ready" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
-                            onClick={() =>
-                              subscribed ? handleDownload(job.id) : setPricingOpen(true)
-                            }
-                          >
-                            <Download className="mr-1 h-3 w-3" /> Get
-                          </Button>
-                        )}
-                        {job.status === "processing" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                            onClick={() => {
-                              setActiveJobId(job.id);
-                              setTheaterMode("real");
-                            }}
-                          >
-                            <RefreshCw className="mr-1 h-3 w-3" /> View
-                          </Button>
-                        )}
-                        {job.status === "failed" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                            onClick={handleGenerate}
-                          >
-                            <RefreshCw className="mr-1 h-3 w-3" /> Retry
-                          </Button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            </div>
           </div>
-        </div>
-      </main>
+
+          {draftSyncing && (
+            <div className="mb-6 flex items-center gap-3 rounded-2xl border border-ring/50 bg-accent/40 p-4 text-sm text-accent-foreground">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              Restoring the photos and settings you prepared on the homepage…
+            </div>
+          )}
+
+          {/* ===== CREATE SECTION ===== */}
+          {activeSection === "create" && (
+            <div className="grid gap-8 xl:grid-cols-[1fr_minmax(20rem,26rem)]">
+              <section id="tour-tool" className="glass-panel rounded-3xl p-6 sm:p-8">
+                <TourTool
+                  images={toolImages}
+                  settings={settings}
+                  onFilesAdded={handleFilesAdded}
+                  onReorder={handleReorder}
+                  onDelete={handleDelete}
+                  onSettingsChange={handleSettingsChange}
+                  onGenerate={handleGenerate}
+                  generateLabel="Generate Tour Video"
+                  generating={
+                    generateMutation.isPending ||
+                    (theaterMode === "real" && activeJob?.status === "processing")
+                  }
+                  disabled={draftSyncing}
+                />
+              </section>
+
+              <div className="space-y-6">
+                {/* Output theater */}
+                <section id="output-theater">
+                  <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Film className="h-4 w-4 text-primary" /> Output
+                  </h2>
+                  {theaterMode === "idle" ? (
+                    <div className="flex aspect-video flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-ring/50 bg-card/50 p-6 text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent">
+                        <Clapperboard className="h-5 w-5 text-primary" />
+                      </span>
+                      <p className="text-sm text-muted-foreground">
+                        Your generated tour will appear here
+                      </p>
+                    </div>
+                  ) : (
+                    <GenerationTheater
+                      mode={theaterMode}
+                      previewImageUrl={firstImageUrl}
+                      jobStatus={
+                        theaterMode === "real"
+                          ? ((activeJob?.status ?? "processing") as
+                              | "processing"
+                              | "ready"
+                              | "failed")
+                          : null
+                      }
+                      videoUrl={activeJob?.videoUrl ?? null}
+                      errorMessage={activeJob?.errorMessage ?? null}
+                      onFakeComplete={() => {
+                        setTimeout(() => setPricingOpen(true), 900);
+                      }}
+                      onUnlockClick={() => setPricingOpen(true)}
+                      onDownload={() => activeJobId && handleDownload(activeJobId)}
+                    />
+                  )}
+                </section>
+
+                {/* Recent videos preview */}
+                <section>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <History className="h-4 w-4 text-primary" /> Recent videos
+                    </h2>
+                    {jobs.length > 0 && (
+                      <button
+                        onClick={() => goToSection("videos")}
+                        className="text-xs font-medium text-primary hover:underline"
+                      >
+                        View all
+                      </button>
+                    )}
+                  </div>
+                  <HistoryList />
+                </section>
+              </div>
+            </div>
+          )}
+
+          {/* ===== VIDEOS SECTION ===== */}
+          {activeSection === "videos" && (
+            <div className="max-w-3xl">
+              <HistoryList />
+            </div>
+          )}
+
+          {/* ===== ANALYTICS SECTION ===== */}
+          {activeSection === "analytics" && (
+            <div className="space-y-6">
+              <div className="grid gap-4 sm:grid-cols-3">
+                {[
+                  { label: "Videos ready", value: readyCount, icon: BadgeCheck },
+                  { label: "Rendering now", value: processingCount, icon: Sparkles },
+                  { label: "Total generated", value: jobs.length, icon: TrendingUp },
+                ].map((s) => (
+                  <div key={s.label} className="glass-panel rounded-2xl p-5">
+                    <div className="flex items-center justify-between">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent">
+                        <s.icon className="h-5 w-5 text-primary" />
+                      </span>
+                      <span className="text-3xl font-semibold text-foreground">{s.value}</span>
+                    </div>
+                    <p className="mt-3 text-sm text-muted-foreground">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="glass-panel rounded-2xl p-6">
+                <h3 className="flex items-center gap-2 font-display text-lg text-foreground">
+                  <BarChart3 className="h-5 w-5 text-primary" /> Plan usage
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {subscribed
+                    ? "You're on a paid plan with unlimited cinematic generations."
+                    : "You're on the free plan. Upgrade to unlock unlimited tours and 1080p exports."}
+                </p>
+                {!subscribed && (
+                  <Button
+                    size="sm"
+                    className="btn-springy mt-4 rounded-full"
+                    onClick={() => setPricingOpen(true)}
+                  >
+                    <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
+                  </Button>
+                )}
+                <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-primary" /> {readyCount} tours ready to
+                    share
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-primary" /> {serverImages.length} photos in
+                    your current project
+                  </li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* ===== Mobile bottom nav ===== */}
+      <DashboardBottomNav
+        onMenuClick={() => setSidebarOpen(true)}
+        onCreateClick={handleCreateClick}
+        activeSection={activeSection}
+        onNavigate={goToSection}
+      />
 
       {/* ===== Pricing popup ===== */}
-      <PricingModal
-        open={pricingOpen}
-        onOpenChange={setPricingOpen}
-        onSelectPlan={handleSelectPlan}
-      />
+      <PricingModal open={pricingOpen} onOpenChange={setPricingOpen} onSelectPlan={handleSelectPlan} />
     </div>
   );
 }

@@ -1,69 +1,77 @@
-import { useLocation } from "wouter";
-import { Button } from "@/components/ui/button";
-import {
-  BarChart3,
-  Clapperboard,
-  Home,
-  Menu,
-  Plus,
-} from "lucide-react";
+import { BarChart3, History, Home, Menu, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface DashboardBottomNavProps {
   onMenuClick?: () => void;
   onCreateClick?: () => void;
+  activeSection?: string;
+  onNavigate?: (section: string) => void;
 }
 
 export default function DashboardBottomNav({
   onMenuClick,
   onCreateClick,
+  activeSection = "create",
+  onNavigate,
 }: DashboardBottomNavProps) {
-  const [location] = useLocation();
-
-  const navItems = [
-    { icon: Home, label: "Home", href: "/dashboard", id: "home" },
-    { icon: Plus, label: "Create", href: "#", id: "create", onClick: onCreateClick },
-    { icon: BarChart3, label: "Analytics", href: "#", id: "analytics" },
+  const leftItems = [
+    { icon: Home, label: "Home", section: "create" },
+    { icon: History, label: "Videos", section: "videos" },
+  ];
+  const rightItems = [
+    { icon: BarChart3, label: "Stats", section: "analytics" },
+    { icon: Menu, label: "Menu", section: "menu" },
   ];
 
-  return (
-    <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border/50 bg-card/95 backdrop-blur-sm lg:hidden">
-      <div className="flex items-center justify-between h-16 px-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="rounded-lg"
-          onClick={onMenuClick}
-        >
-          <Menu className="h-5 w-5" />
-          <span className="sr-only">Menu</span>
-        </Button>
+  const NavButton = ({
+    icon: Icon,
+    label,
+    section,
+  }: {
+    icon: typeof Home;
+    label: string;
+    section: string;
+  }) => {
+    const active = activeSection === section;
+    return (
+      <button
+        onClick={() => {
+          if (section === "menu") onMenuClick?.();
+          else onNavigate?.(section);
+        }}
+        className={cn(
+          "flex flex-1 flex-col items-center justify-center gap-0.5 py-1 text-[10px] font-medium transition-colors",
+          active ? "text-primary" : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Icon className={cn("h-5 w-5 transition-transform", active && "scale-110")} />
+        <span>{label}</span>
+      </button>
+    );
+  };
 
-        <div className="flex items-center gap-1 flex-1 justify-center">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => {
-                if (item.onClick) {
-                  item.onClick();
-                } else if (item.href.startsWith("#")) {
-                  document.getElementById(item.href.slice(1))?.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
-              className={cn(
-                "flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
-                location === item.href || (item.id === "create" && location === "/dashboard")
-                  ? "text-primary bg-primary/10"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted",
-              )}
-            >
-              <item.icon className="h-5 w-5" />
-              <span className="hidden sm:inline">{item.label}</span>
-            </button>
-          ))}
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 lg:hidden">
+      <div className="glass-panel relative flex h-16 items-stretch rounded-t-3xl border-x-0 border-b-0 px-2 pb-[env(safe-area-inset-bottom)]">
+        {leftItems.map((item) => (
+          <NavButton key={item.section} {...item} />
+        ))}
+
+        {/* Elevated center Create button */}
+        <div className="relative flex w-20 shrink-0 items-start justify-center">
+          <button
+            onClick={onCreateClick}
+            className="btn-springy animate-glow-pulse absolute -top-6 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg ring-4 ring-background"
+            aria-label="Create tour"
+          >
+            <Plus className="h-6 w-6" />
+          </button>
+          <span className="mt-9 text-[10px] font-medium text-muted-foreground">Create</span>
         </div>
 
-        <div className="w-10" />
+        {rightItems.map((item) => (
+          <NavButton key={item.section} {...item} />
+        ))}
       </div>
     </nav>
   );
