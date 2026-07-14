@@ -194,10 +194,7 @@ export default function Home() {
 
   const settings: ToolSettings = {
     tourStyle: draft.tourStyle,
-    creativeText: draft.creativeText,
-    resolution: draft.resolution,
     aspectRatio: draft.aspectRatio,
-    clipDuration: draft.clipDuration,
   };
 
   const handleFilesAdded = async (files: File[]) => {
@@ -205,10 +202,13 @@ export default function Home() {
     for (const file of files) {
       try {
         const dataUrl = await fileToDataUrl(file);
+        // Derive the real mime from the produced data URL so the format is
+        // preserved faithfully on upload (jpeg/png/webp), never mislabeled.
+        const mimeType = dataUrl.slice(5, dataUrl.indexOf(";")) || file.type || "image/jpeg";
         newImages.push({
           cid: `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           fileName: file.name,
-          mimeType: "image/jpeg",
+          mimeType,
           dataUrl,
         });
       } catch {

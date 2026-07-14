@@ -50,14 +50,16 @@ export interface SeedanceSubmitResult {
  * Reference images are passed in strict sequence order via input_references,
  * and `generate_audio: false` ensures the output has no audio track.
  */
+/** Every video is rendered at full HD; resolution is not user-configurable. */
+export const OUTPUT_RESOLUTION = "1080p";
+
 export async function submitSeedanceVideo(params: {
   prompt: string;
   images: OrderedImage[];
   duration: number;
-  resolution: string;
   aspectRatio: string;
 }): Promise<SeedanceSubmitResult> {
-  const { prompt, images, duration, resolution, aspectRatio } = params;
+  const { prompt, images, duration, aspectRatio } = params;
   if (!prompt.trim()) throw new Error("Empty prompt — refusing to submit paid generation");
   if (images.length === 0) throw new Error("No reference images — refusing to submit paid generation");
 
@@ -72,10 +74,12 @@ export async function submitSeedanceVideo(params: {
     body: JSON.stringify({
       model: getVideoModel(),
       prompt,
+      // AI-decided length (Kling max 15s). Always full HD, never with audio.
       duration,
-      resolution,
+      resolution: OUTPUT_RESOLUTION,
       aspect_ratio: aspectRatio,
       generate_audio: false,
+      // Reference images passed in strict user order at their original quality.
       input_references: ordered.map((img) => ({
         type: "image_url",
         image_url: { url: img.publicUrl },

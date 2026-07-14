@@ -1,14 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 import {
   ASPECT_RATIOS,
-  DURATIONS,
   MAX_IMAGES,
-  RESOLUTIONS,
   TOUR_STYLES,
   type TourStyleId,
 } from "@shared/plans";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -17,15 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Brain,
   Camera,
   Check,
   Clapperboard,
+  Clock,
   Footprints,
   GripVertical,
   ImagePlus,
   Loader2,
+  MonitorPlay,
   Plane,
-  Sparkles,
   Trash2,
   Wand2,
 } from "lucide-react";
@@ -43,10 +42,7 @@ export interface ToolImage {
 
 export interface ToolSettings {
   tourStyle: TourStyleId;
-  creativeText: string;
-  resolution: string;
   aspectRatio: string;
-  clipDuration: number;
 }
 
 interface TourToolProps {
@@ -331,41 +327,8 @@ export default function TourTool({
         </div>
       </div>
 
-      {/* Creative direction */}
-      <div>
-        <h3 className="mb-2 text-sm font-medium text-foreground flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
-          Creative direction <span className="font-normal text-muted-foreground">(optional)</span>
-        </h3>
-        <Textarea
-          value={settings.creativeText}
-          onChange={(e) => onSettingsChange({ creativeText: e.target.value })}
-          placeholder='e.g. "Warm golden-hour glow, slow dreamy movement, highlight the fireplace and the garden view..."'
-          className="min-h-20 resize-none rounded-xl bg-card/70"
-          maxLength={2000}
-        />
-      </div>
-
-      {/* Settings row */}
+      {/* Output settings */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Resolution</label>
-          <Select
-            value={settings.resolution}
-            onValueChange={(v) => onSettingsChange({ resolution: v })}
-          >
-            <SelectTrigger className="rounded-xl bg-card/70">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {RESOLUTIONS.map((r) => (
-                <SelectItem key={r} value={r}>
-                  {r}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
         <div>
           <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Aspect ratio</label>
           <Select
@@ -384,24 +347,34 @@ export default function TourTool({
             </SelectContent>
           </Select>
         </div>
+        {/* Resolution — fixed at 1080p */}
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Resolution</label>
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-card/70 px-3 py-2.5 text-sm text-foreground">
+            <MonitorPlay className="h-4 w-4 text-primary" />
+            <span className="font-medium">1080p</span>
+            <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">Full HD</span>
+          </div>
+        </div>
+        {/* Video length — chosen by AI */}
         <div>
           <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Video length</label>
-          <Select
-            value={String(settings.clipDuration)}
-            onValueChange={(v) => onSettingsChange({ clipDuration: Number(v) })}
-          >
-            <SelectTrigger className="rounded-xl bg-card/70">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DURATIONS.map((d) => (
-                <SelectItem key={d} value={String(d)}>
-                  {d} seconds
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-card/70 px-3 py-2.5 text-sm text-foreground">
+            <Clock className="h-4 w-4 text-primary" />
+            <span className="font-medium">Auto</span>
+            <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">AI-timed</span>
+          </div>
         </div>
+      </div>
+
+      {/* AI direction note */}
+      <div className="flex items-start gap-2.5 rounded-xl border border-primary/15 bg-accent/40 px-4 py-3 text-xs text-muted-foreground">
+        <Brain className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <p>
+          Our AI studies your photos to direct the ideal camera movement and picks the perfect
+          length automatically (up to 15s). Every tour renders in crisp 1080p with your original
+          photos kept pixel-perfect — no cropping, no quality loss.
+        </p>
       </div>
 
       {/* Generate CTA */}
