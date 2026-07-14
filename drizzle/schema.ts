@@ -1,0 +1,126 @@
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+
+/**
+ * Core user table backing auth flow.
+ * Extend this file with additional tables as your product grows.
+ * Columns use camelCase to match both database fields and generated types.
+ */
+export const users = mysqlTable("users", {
+  /**
+   * Surrogate primary key. Auto-incremented numeric value managed by the database.
+   * Use this for relations between tables.
+   */
+  id: int("id").autoincrement().primaryKey(),
+  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * A tour project groups a user's uploaded photos, settings, and generations.
+ * Each user gets one "active" project restored on login (the tool state),
+ * but the model supports multiple projects for history.
+ */
+export const projects = mysqlTable("projects", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  name: varchar("name", { length: 255 }).default("My Property Tour").notNull(),
+  /** Tour style — labels exactly: Walkthrough, Drone, Cinematic */
+  tourStyle: mysqlEnum("tourStyle", ["Walkthrough", "Drone", "Cinematic"]).default("Walkthrough").notNull(),
+  /** Optional creative direction text from the user (prompt style) */
+  creativeText: text("creativeText"),
+  /** Video settings */
+  resolution: varchar("resolution", { length: 16 }).default("720p").notNull(),
+  aspectRatio: varchar("aspectRatio", { length: 8 }).default("16:9").notNull(),
+  clipDuration: int("clipDuration").default(5).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Project = typeof projects.$inferSelect;
+export type InsertProject = typeof projects.$inferInsert;
+
+/**
+ * Uploaded property photos. Strict ordering is enforced via sequenceIndex —
+ * this index is the single source of truth for photo order and is stored
+ * alongside the S3 key so the generation pipeline can never mix up order.
+ */
+export const projectImages = mysqlTable("project_images", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(),
+  userId: int("userId").notNull(),
+  /** 0-based strict ordering index within the project */
+  sequenceIndex: int("sequenceIndex").notNull(),
+  /** S3 storage key (the only way to reach the object) */
+  fileKey: varchar("fileKey", { length: 512 }).notNull(),
+  /** Serving URL (/manus-storage/{key}) */
+  url: varchar("url", { length: 768 }).notNull(),
+  fileName: varchar("fileName", { length: 255 }),
+  mimeType: varchar("mimeType", { length: 64 }),
+  /** Room label detected by analysis or set by user, e.g. "Living room" */
+  roomTag: varchar("roomTag", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ProjectImage = typeof projectImages.$inferSelect;
+export type InsertProjectImage = typeof projectImages.$inferInsert;
+
+/**
+ * Video generation jobs. Status labels exactly: processing, ready, failed.
+ * The optimized prompt (from the hidden LLM analysis step) is stored
+ * server-side only and never exposed via any public procedure.
+ */
+export const generationJobs = mysqlTable("generation_jobs", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(),
+  userId: int("userId").notNull(),
+  status: mysqlEnum("status", ["processing", "ready", "failed"]).default("processing").notNull(),
+  tourStyle: mysqlEnum("tourStyle", ["Walkthrough", "Drone", "Cinematic"]).notNull(),
+  resolution: varchar("resolution", { length: 16 }).notNull(),
+  aspectRatio: varchar("aspectRatio", { length: 8 }).notNull(),
+  clipDuration: int("clipDuration").notNull(),
+  /** Snapshot of ordered image ids at generation time (JSON array) — order guarantee */
+  imageSequence: text("imageSequence"),
+  /** Hidden: LLM-optimized prompt sent to Seedance. NEVER exposed to client. */
+  optimizedPrompt: text("optimizedPrompt"),
+  /** OpenRouter async video job id */
+  openrouterJobId: varchar("openrouterJobId", { length: 128 }),
+  /** Final video storage */
+  videoKey: varchar("videoKey", { length: 512 }),
+  videoUrl: varchar("videoUrl", { length: 768 }),
+  thumbnailUrl: varchar("thumbnailUrl", { length: 768 }),
+  errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type GenerationJob = typeof generationJobs.$inferSelect;
+export type InsertGenerationJob = typeof generationJobs.$inferInsert;
+
+/**
+ * Stripe subscription state per user. Plans: starter ($9/mo), pro ($39/mo),
+ * annual ($29/yr), business ($99/mo).
+ */
+export const subscriptions = mysqlTable("subscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().unique(),
+  stripeCustomerId: varchar("stripeCustomerId", { length: 128 }),
+  stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
+  plan: mysqlEnum("plan", ["starter", "pro", "annual", "business"]),
+  status: varchar("status", { length: 32 }).default("inactive").notNull(),
+  currentPeriodEnd: timestamp("currentPeriodEnd"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type InsertSubscription = typeof subscriptions.$inferInsert;

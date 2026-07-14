@@ -1,0 +1,627 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { startLogin } from "@/const";
+import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
+import { Button } from "@/components/ui/button";
+import { useToolDraft, fileToDataUrl, type DraftImage } from "@/hooks/useToolDraft";
+import {
+  ArrowRight,
+  Brain,
+  CheckCircle2,
+  Clapperboard,
+  Clock,
+  Download,
+  Eye,
+  Layers,
+  ListOrdered,
+  Sparkles,
+  Star,
+  TrendingUp,
+  Upload,
+  Wand2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+
+const HERO_IMG_1 = "/manus-storage/hero-living_b05098b0.jpg";
+const HERO_IMG_2 = "/manus-storage/hero-kitchen2_815b2217.jpg";
+const HERO_IMG_3 = "/manus-storage/hero-aerial_18f0bf6c.jpg";
+
+/** Scroll-reveal helper */
+function useReveal() {
+  useEffect(() => {
+    const els = document.querySelectorAll(".reveal-on-scroll");
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            e.target.classList.add("is-visible");
+            io.unobserve(e.target);
+          }
+        });
+      },
+      { threshold: 0.15 },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+}
+
+/** Hero preview card that crossfades between room shots with ken-burns motion */
+function HeroPreview() {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setFrame((f) => (f + 1) % 3), 4500);
+    return () => clearInterval(t);
+  }, []);
+  const imgs = [HERO_IMG_1, HERO_IMG_2, HERO_IMG_3];
+  return (
+    <div className="glass-panel relative overflow-hidden rounded-3xl p-2 sm:p-3">
+      <div className="relative aspect-video overflow-hidden rounded-2xl">
+        {imgs.map((src, i) => (
+          <img
+            key={src}
+            src={src}
+            alt="AI house tour preview"
+            className={cn(
+              "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
+              i === frame ? "opacity-100 animate-ken-burns" : "opacity-0",
+            )}
+          />
+        ))}
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/50 to-transparent p-3">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-white">
+            <Clapperboard className="h-3.5 w-3.5" /> AI Tour Preview
+          </span>
+          <span className="flex gap-1">
+            {imgs.map((_, i) => (
+              <span
+                key={i}
+                className={cn(
+                  "h-1.5 rounded-full transition-all duration-500",
+                  i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50",
+                )}
+              />
+            ))}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Home() {
+  const { isAuthenticated } = useAuth();
+  const [, navigate] = useLocation();
+  const { draft, update } = useToolDraft();
+  const heroRef = useRef<HTMLDivElement>(null);
+  const [parallax, setParallax] = useState({ x: 0, y: 0 });
+  useReveal();
+
+  // Cursor parallax on hero
+  const onHeroMouseMove = useCallback((e: React.MouseEvent) => {
+    const rect = heroRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / rect.width - 0.5;
+    const y = (e.clientY - rect.top) / rect.height - 0.5;
+    setParallax({ x, y });
+  }, []);
+
+  // Returning from the sign-up gate: continue to the dashboard tool.
+  useEffect(() => {
+    if (isAuthenticated && draft.pendingGenerate) {
+      navigate("/dashboard");
+    }
+  }, [isAuthenticated, draft.pendingGenerate, navigate]);
+
+  const toolImages: ToolImage[] = draft.images.map((img) => ({
+    id: img.cid,
+    previewUrl: img.dataUrl,
+    fileName: img.fileName,
+    roomTag: img.roomTag,
+  }));
+
+  const settings: ToolSettings = {
+    tourStyle: draft.tourStyle,
+    creativeText: draft.creativeText,
+    resolution: draft.resolution,
+    aspectRatio: draft.aspectRatio,
+    clipDuration: draft.clipDuration,
+  };
+
+  const handleFilesAdded = async (files: File[]) => {
+    const newImages: DraftImage[] = [];
+    for (const file of files) {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        newImages.push({
+          cid: `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          fileName: file.name,
+          mimeType: "image/jpeg",
+          dataUrl,
+        });
+      } catch {
+        toast.error(`Could not read ${file.name}`);
+      }
+    }
+    if (newImages.length > 0) {
+      update({ images: [...draft.images, ...newImages] });
+      toast.success(`${newImages.length} photo${newImages.length > 1 ? "s" : ""} added to your tour`);
+    }
+  };
+
+  const handleReorder = (orderedIds: Array<string | number>) => {
+    const byId = new Map(draft.images.map((i) => [i.cid, i]));
+    const reordered = orderedIds
+      .map((id) => byId.get(String(id)))
+      .filter((i): i is DraftImage => Boolean(i));
+    update({ images: reordered });
+  };
+
+  const handleDelete = (id: string | number) => {
+    update({ images: draft.images.filter((i) => i.cid !== String(id)) });
+  };
+
+  const handleSettingsChange = (patch: Partial<ToolSettings>) => {
+    update(patch);
+  };
+
+  const handleGenerate = () => {
+    if (draft.images.length === 0) {
+      toast.error("Add at least one photo first");
+      return;
+    }
+    // Sign-up gate: everything stays in the local draft, restored after login.
+    update({ pendingGenerate: true });
+    if (isAuthenticated) {
+      navigate("/dashboard");
+    } else {
+      toast("Create a free account to generate — your photos & settings are saved.");
+      setTimeout(() => startLogin(), 600);
+    }
+  };
+
+  const scrollToTool = () => {
+    document.getElementById("tour-tool")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return (
+    <div className="min-h-screen overflow-x-hidden">
+      {/* ===== Nav ===== */}
+      <header className="fixed inset-x-0 top-0 z-50">
+        <div className="container flex h-16 items-center justify-between">
+          <a href="/" className="flex items-center gap-2 font-display text-lg text-foreground">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+              <Clapperboard className="h-4 w-4" />
+            </span>
+            EstateTour AI
+          </a>
+          <nav className="flex items-center gap-2">
+            {isAuthenticated ? (
+              <Button
+                variant="default"
+                className="btn-springy rounded-full"
+                onClick={() => navigate("/dashboard")}
+              >
+                Dashboard <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  className="btn-springy rounded-full text-foreground/80"
+                  onClick={() => startLogin()}
+                >
+                  Log in
+                </Button>
+                <Button className="btn-springy rounded-full" onClick={scrollToTool}>
+                  Try it free
+                </Button>
+              </>
+            )}
+          </nav>
+        </div>
+        <div className="glass-panel absolute inset-0 -z-10 rounded-none border-x-0 border-t-0" />
+      </header>
+
+      {/* ===== Hero ===== */}
+      <section
+        ref={heroRef}
+        onMouseMove={onHeroMouseMove}
+        className="relative flex min-h-screen items-center pt-24 pb-16"
+      >
+        {/* Drifting gradient blobs */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            className="animate-blob-1 absolute -left-32 -top-24 h-[34rem] w-[34rem] rounded-full opacity-60 blur-3xl"
+            style={{
+              background: "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
+              translate: `${parallax.x * -18}px ${parallax.y * -18}px`,
+            }}
+          />
+          <div
+            className="animate-blob-2 absolute right-[-10rem] top-[15%] h-[30rem] w-[30rem] rounded-full opacity-50 blur-3xl"
+            style={{
+              background: "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
+              translate: `${parallax.x * -26}px ${parallax.y * -26}px`,
+            }}
+          />
+          <div
+            className="animate-blob-3 absolute bottom-[-8rem] left-[30%] h-[26rem] w-[26rem] rounded-full opacity-40 blur-3xl"
+            style={{
+              background: "radial-gradient(circle, #F5C5DE 0%, #D9C4F2 60%, transparent 78%)",
+              translate: `${parallax.x * -12}px ${parallax.y * -12}px`,
+            }}
+          />
+        </div>
+
+        <div className="container relative grid items-center gap-12 lg:grid-cols-2">
+          <div>
+            <span className="animate-fade-up inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-primary" /> AI video for real estate
+            </span>
+            <h1 className="animate-fade-up-delay-1 mt-5 font-display text-4xl leading-tight text-foreground sm:text-5xl lg:text-[3.4rem]">
+              Your listing photos,{" "}
+              <span className="bg-gradient-to-r from-[#E894B5] to-[#c98ad6] bg-clip-text text-transparent">
+                reborn as cinema
+              </span>
+            </h1>
+            <p className="animate-fade-up-delay-2 mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
+              Upload the photos you already have. Our AI walks buyers through every room,
+              lifts them over the rooftop, and delivers a broadcast-quality tour video —
+              in minutes, not days. No drone pilot. No film crew. No editing suite.
+            </p>
+            <div className="animate-fade-up-delay-3 mt-8 flex flex-wrap items-center gap-4">
+              <Button
+                size="lg"
+                onClick={scrollToTool}
+                className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
+              >
+                Create my tour video <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Free to try · no credit card to start
+              </span>
+            </div>
+          </div>
+
+          <div
+            className="animate-fade-up-delay-2"
+            style={{ translate: `${parallax.x * 10}px ${parallax.y * 10}px` }}
+          >
+            <HeroPreview />
+          </div>
+        </div>
+      </section>
+
+      {/* ===== Features ===== */}
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              Every listing deserves a premiere
+            </h2>
+            <p className="mt-4 text-muted-foreground">
+              Three tour styles, one intelligent pipeline. Your photos stay exactly as they are —
+              the camera is the only thing that moves.
+            </p>
+          </div>
+          <div className="mt-14 grid gap-6 md:grid-cols-3">
+            {[
+              {
+                icon: Layers,
+                title: "Photos in, film out",
+                body: "Drop in your listing photos in the order you want the tour to flow. Our pipeline preserves that exact sequence — every room appears exactly where you placed it.",
+              },
+              {
+                icon: Brain,
+                title: "A director in the machine",
+                body: "Behind the scenes, AI studies each room's geometry and lighting to choose the most flattering camera move — push-ins, pans, orbits, and aerial reveals.",
+              },
+              {
+                icon: Download,
+                title: "Ready for every channel",
+                body: "Export in widescreen for YouTube, vertical for Reels and TikTok, or square for feeds — up to crisp 1080p on every paid plan.",
+              },
+            ].map((f, i) => (
+              <div
+                key={f.title}
+                className="reveal-on-scroll glass-panel soft-card-hover rounded-2xl p-7"
+                style={{ transitionDelay: `${i * 150}ms` }}
+              >
+                <span className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent">
+                  <f.icon className="h-5 w-5 text-primary" strokeWidth={1.6} />
+                </span>
+                <h3 className="font-display text-lg text-foreground">{f.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{f.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== How it works ===== */}
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              From photos to premiere in five steps
+            </h2>
+          </div>
+          <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            {[
+              { icon: Upload, label: "Upload", body: "Add your listing photos" },
+              { icon: ListOrdered, label: "Confirm order", body: "Drag rooms into tour sequence" },
+              { icon: Wand2, label: "Generate", body: "AI films your walkthrough" },
+              { icon: Eye, label: "Review", body: "Watch your cinematic tour" },
+              { icon: Download, label: "Export", body: "Download & share anywhere" },
+            ].map((s, i) => (
+              <div
+                key={s.label}
+                className="reveal-on-scroll relative rounded-2xl border border-border bg-card/70 p-5 text-center soft-card-hover"
+                style={{ transitionDelay: `${i * 120}ms` }}
+              >
+                <span className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-accent">
+                  <s.icon className="h-4 w-4 text-primary" strokeWidth={1.6} />
+                </span>
+                <span className="absolute left-3 top-3 text-xs font-semibold text-primary/60">
+                  {i + 1}
+                </span>
+                <p className="font-medium text-sm text-foreground">{s.label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{s.body}</p>
+                {i < 4 && (
+                  <ArrowRight className="absolute -right-3 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-primary/50 lg:block" />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== Use Cases ===== */}
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              Perfect for every property type
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Whether it's a cozy apartment, sprawling estate, or commercial space, EstateTour AI adapts to your listing.
+            </p>
+          </div>
+          <div className="mt-14 grid gap-6 md:grid-cols-3">
+            {[
+              {
+                icon: TrendingUp,
+                title: "Luxury Estates",
+                body: "Showcase grand foyers, infinity pools, and panoramic views with cinematic drone-style reveals and slow, deliberate camera moves.",
+              },
+              {
+                icon: Clock,
+                title: "Quick Turnarounds",
+                body: "Generate broadcast-quality tours in minutes, not days. Perfect for hot markets where speed matters and every listing counts.",
+              },
+              {
+                icon: TrendingUp,
+                title: "Multi-Unit Complexes",
+                body: "Create consistent, professional tours across dozens of units. Standardize your marketing and close faster with visual confidence.",
+              },
+            ].map((c, i) => (
+              <div
+                key={c.title}
+                className="reveal-on-scroll glass-panel soft-card-hover rounded-2xl p-7"
+                style={{ transitionDelay: `${i * 150}ms` }}
+              >
+                <span className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent">
+                  <c.icon className="h-5 w-5 text-primary" strokeWidth={1.6} />
+                </span>
+                <h3 className="font-display text-lg text-foreground">{c.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{c.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== Testimonials ===== */}
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              Trusted by real estate pros
+            </h2>
+          </div>
+          <div className="mt-14 grid gap-6 md:grid-cols-3">
+            {[
+              {
+                quote: "We went from 3 days to 3 hours per listing. Our showings are up 40% since we started using EstateTour AI.",
+                author: "Sarah Chen",
+                role: "Real Estate Agent, San Francisco",
+              },
+              {
+                quote: "The quality is indistinguishable from a professional videographer. At a fraction of the cost and zero scheduling headaches.",
+                author: "Marcus Rodriguez",
+                role: "Luxury Property Manager, Miami",
+              },
+              {
+                quote: "Our buyers love the immersive experience. We've noticed longer engagement times and more qualified leads from listings with EstateTour videos.",
+                author: "Jennifer Park",
+                role: "Brokerage Director, Seattle",
+              },
+            ].map((t, i) => (
+              <div
+                key={t.author}
+                className="reveal-on-scroll glass-panel soft-card-hover rounded-2xl p-7"
+                style={{ transitionDelay: `${i * 150}ms` }}
+              >
+                <div className="mb-4 flex gap-0.5">
+                  {[...Array(5)].map((_, j) => (
+                    <Star key={j} className="h-4 w-4 fill-primary text-primary" />
+                  ))}
+                </div>
+                <p className="text-sm leading-relaxed text-muted-foreground italic">"{t.quote}"</p>
+                <div className="mt-5 border-t border-border/50 pt-4">
+                  <p className="font-medium text-sm text-foreground">{t.author}</p>
+                  <p className="text-xs text-muted-foreground">{t.role}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== Pricing Preview ===== */}
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              Simple, transparent pricing
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Start free, upgrade anytime. No hidden fees, no surprise charges.
+            </p>
+          </div>
+          <div className="mt-14 grid gap-6 md:grid-cols-4">
+            {[
+              { name: "Starter", price: "$9", period: "/mo", features: ["Up to 5 tours/month", "720p export", "Basic support"] },
+              { name: "Pro", price: "$39", period: "/mo", features: ["Unlimited tours", "1080p export", "Priority support", "Custom branding"], featured: true },
+              { name: "Annual", price: "$29", period: "/yr", features: ["Best value", "All Pro features", "Annual billing", "Early access"] },
+              { name: "Business", price: "$99", period: "/mo", features: ["Team access", "API integration", "Dedicated support", "Custom workflows"] },
+            ].map((plan, i) => (
+              <div
+                key={plan.name}
+                className={cn(
+                  "reveal-on-scroll relative rounded-2xl p-7 transition-all",
+                  plan.featured
+                    ? "glass-panel border-primary/50 bg-primary/5 ring-2 ring-primary/20"
+                    : "glass-panel soft-card-hover",
+                )}
+                style={{ transitionDelay: `${i * 120}ms` }}
+              >
+                {plan.featured && (
+                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
+                    Most popular
+                  </span>
+                )}
+                <h3 className="font-display text-lg text-foreground">{plan.name}</h3>
+                <div className="mt-3 flex items-baseline gap-1">
+                  <span className="text-3xl font-bold text-foreground">{plan.price}</span>
+                  <span className="text-sm text-muted-foreground">{plan.period}</span>
+                </div>
+                <ul className="mt-6 space-y-3">
+                  {plan.features.map((f) => (
+                    <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <CheckCircle2 className="h-4 w-4 text-primary" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== The Tool ===== */}
+      <section id="tour-tool" className="relative py-24">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            className="animate-blob-2 absolute left-[-8rem] top-[20%] h-[24rem] w-[24rem] rounded-full opacity-40 blur-3xl"
+            style={{ background: "radial-gradient(circle, #F7B8D0 0%, transparent 70%)" }}
+          />
+        </div>
+        <div className="container relative">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
+              Start your tour right here
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Upload photos, set the order, pick a style. When you hit generate, we'll save
+              everything to your free account.
+            </p>
+          </div>
+          <div className="reveal-on-scroll mx-auto mt-10 max-w-3xl">
+            <div className="glass-panel rounded-3xl p-6 sm:p-8">
+              <TourTool
+                images={toolImages}
+                settings={settings}
+                onFilesAdded={handleFilesAdded}
+                onReorder={handleReorder}
+                onDelete={handleDelete}
+                onSettingsChange={handleSettingsChange}
+                onGenerate={handleGenerate}
+                generateLabel="Generate Tour Video"
+              />
+            </div>
+            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+              Your photos and settings are preserved when you sign up
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== CTA Banner ===== */}
+      <section className="relative py-24 text-center">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            className="animate-blob-1 absolute right-[-6rem] top-[10%] h-[22rem] w-[22rem] rounded-full opacity-30 blur-3xl"
+            style={{ background: "radial-gradient(circle, #E894B5 0%, transparent 70%)" }}
+          />
+        </div>
+        <div className="container relative">
+          <h2 className="reveal-on-scroll font-display text-3xl text-foreground sm:text-4xl">
+            Ready to transform your listings?
+          </h2>
+          <p className="reveal-on-scroll mt-4 mx-auto max-w-xl text-muted-foreground">
+            Join hundreds of agents and brokers creating stunning property tours in minutes.
+          </p>
+          <div className="reveal-on-scroll mt-8 flex flex-wrap items-center justify-center gap-4">
+            <Button
+              size="lg"
+              onClick={scrollToTool}
+              className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
+            >
+              Create your first tour <ArrowRight className="ml-2 h-5 w-5" />
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              className="btn-springy rounded-full px-8 py-6"
+              onClick={() => startLogin()}
+            >
+              View pricing
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== Footer ===== */}
+      <footer className="mt-8 border-t border-border/70 py-10">
+        <div className="container flex flex-col items-center justify-between gap-4 sm:flex-row">
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Clapperboard className="h-4 w-4 text-primary" /> EstateTour AI · Cinematic property tours
+          </span>
+          <nav className="flex flex-wrap gap-6 text-sm text-muted-foreground">
+            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+              Create a tour
+            </button>
+            <button
+              onClick={() => (isAuthenticated ? navigate("/dashboard") : startLogin())}
+              className="transition-colors hover:text-primary"
+            >
+              {isAuthenticated ? "Dashboard" : "Sign in"}
+            </button>
+            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+              Pricing
+            </button>
+            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+              How it works
+            </button>
+          </nav>
+        </div>
+      </footer>
+    </div>
+  );
+}
