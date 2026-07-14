@@ -23,6 +23,26 @@ import { createHash, randomInt } from "node:crypto";
 const OTP_TTL_MINUTES = 10;
 const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 
+/**
+ * Read + sanitize the Brevo API key from the environment.
+ *
+ * A very common cause of Brevo's `401 {"message":"Key not found"}` is invisible
+ * junk in the env value: a trailing newline (common when pasting into a secrets
+ * UI), surrounding quotes, or an accidental `api-key:` / `Bearer ` prefix. We
+ * strip all of that so a copy-paste slip doesn't look like an auth failure.
+ * Returns undefined when nothing usable is configured.
+ */
+function getBrevoApiKey(): string | undefined {
+  const raw = process.env.BREVO_API_KEY;
+  if (!raw) return undefined;
+  const cleaned = raw
+    .trim()
+    .replace(/^(api-key|authorization|bearer)\s*[:=]?\s*/i, "")
+    .replace(/^["'`]|["'`]$/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
 export type SendEmailInput = {
   to: string;
   subject: string;
@@ -67,7 +87,7 @@ export type SendEmailResult = {
  * (and surface) delivery failures instead of them being silently swallowed.
  */
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const apiKey = process.env.BREVO_API_KEY;
+  const apiKey = getBrevoApiKey();
 
   if (!apiKey) {
     console.warn(
@@ -75,6 +95,15 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
         `  To: ${input.to}\n  Subject: ${input.subject}\n  ${input.text}\n`,
     );
     return { ok: true, skipped: true };
+  }
+
+  // Brevo v3 API keys look like `xkeysib-...`. Warn (don't block) on anything
+  // else, since SMTP credentials and Marketing keys will fail with "Key not found".
+  if (!apiKey.startsWith("xkeysib-")) {
+    console.warn(
+      `[email] BREVO_API_KEY does not look like a Brevo v3 API key (expected it to start with "xkeysib-"). ` +
+        `If sending fails with 401 "Key not found", generate a v3 API key under Brevo → SMTP & API → API Keys.`,
+    );
   }
 
   const sender = resolveSender();
@@ -105,6 +134,14 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
         reason = parsed.message || parsed.code || detail;
       } catch {
         /* keep raw detail */
+      }
+      // Add actionable hints for the most common Brevo rejections.
+      if (res.status === 401) {
+        reason +=
+          " — the BREVO_API_KEY is invalid or not recognized. Use a Brevo v3 API key " +
+          '(starts with "xkeysib-", from SMTP & API → API Keys), with no quotes or extra spaces.';
+      } else if (/sender/i.test(reason)) {
+        reason += ` — verify the sender "${sender.email}" under Brevo → Senders, Domains & Dedicated IPs.`;
       }
       console.warn(
         `[email] Brevo REJECTED the send: ${res.status} ${res.statusText} — ${detail} ` +
