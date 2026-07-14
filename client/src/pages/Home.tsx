@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
 import { useToolDraft, fileToDataUrl, type DraftImage } from "@/hooks/useToolDraft";
@@ -15,12 +14,14 @@ import {
   Eye,
   Layers,
   ListOrdered,
+  Menu,
   Play,
   Sparkles,
   Star,
   TrendingUp,
   Upload,
   Wand2,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -146,7 +147,27 @@ export default function Home() {
   const { draft, update } = useToolDraft();
   const heroRef = useRef<HTMLDivElement>(null);
   const [parallax, setParallax] = useState({ x: 0, y: 0 });
+  const [scrolled, setScrolled] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   useReveal();
+
+  // Header turns from transparent (over hero) to a frosted bar once the user scrolls.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Smooth-scroll to a section (or the top for "Home") and close the mobile menu.
+  const scrollToSection = useCallback((id: string) => {
+    setMobileMenuOpen(false);
+    if (id === "top") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+  }, []);
 
   // Cursor parallax on hero
   const onHeroMouseMove = useCallback((e: React.MouseEvent) => {
@@ -227,7 +248,7 @@ export default function Home() {
       navigate("/dashboard");
     } else {
       toast("Create a free account to generate — your photos & settings are saved.");
-      setTimeout(() => startLogin(), 600);
+      setTimeout(() => navigate("/signup"), 600);
     }
   };
 
@@ -238,15 +259,51 @@ export default function Home() {
   return (
     <div className="min-h-screen overflow-x-hidden">
       {/* ===== Nav ===== */}
-      <header className="fixed inset-x-0 top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <a href="/" className="flex items-center gap-2 font-display text-lg text-foreground">
+      <header
+        className={cn(
+          "fixed inset-x-0 top-0 z-50 transition-all duration-300",
+          scrolled
+            ? "border-b border-primary/10 bg-background/80 shadow-[0_8px_30px_rgba(232,148,181,0.12)] backdrop-blur-xl"
+            : "border-b border-transparent bg-transparent",
+        )}
+      >
+        <div
+          className={cn(
+            "container flex items-center justify-between transition-all duration-300",
+            scrolled ? "h-14" : "h-16",
+          )}
+        >
+          {/* Logo */}
+          <button
+            onClick={() => scrollToSection("top")}
+            className="flex items-center gap-2 font-display text-lg text-foreground"
+          >
             <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <Clapperboard className="h-4 w-4" />
             </span>
             EstateTour AI
-          </a>
-          <nav className="flex items-center gap-2">
+          </button>
+
+          {/* Center menu (desktop) */}
+          <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 md:flex">
+            {[
+              { label: "Home", id: "top" },
+              { label: "AI Real Estate", id: "features" },
+              { label: "How it works", id: "how-it-works" },
+              { label: "Pricing", id: "pricing" },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => scrollToSection(item.id)}
+                className="rounded-full px-3.5 py-2 text-sm font-medium text-foreground/70 transition-colors hover:bg-accent/70 hover:text-primary"
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* Right actions */}
+          <div className="flex items-center gap-2">
             {isAuthenticated ? (
               <Button
                 variant="default"
@@ -259,8 +316,8 @@ export default function Home() {
               <>
                 <Button
                   variant="ghost"
-                  className="btn-springy rounded-full text-foreground/80"
-                  onClick={() => startLogin()}
+                  className="btn-springy hidden rounded-full text-foreground/80 sm:inline-flex"
+                  onClick={() => navigate("/login")}
                 >
                   Log in
                 </Button>
@@ -269,9 +326,48 @@ export default function Home() {
                 </Button>
               </>
             )}
-          </nav>
+            {/* Mobile menu toggle */}
+            <button
+              onClick={() => setMobileMenuOpen((o) => !o)}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/70 md:hidden"
+              aria-label="Toggle menu"
+              aria-expanded={mobileMenuOpen}
+            >
+              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
+          </div>
         </div>
-        <div className="glass-panel absolute inset-0 -z-10 rounded-none border-x-0 border-t-0" />
+
+        {/* Mobile dropdown menu */}
+        {mobileMenuOpen && (
+          <div className="glass-panel mx-3 mb-2 rounded-2xl border border-primary/10 p-2 md:hidden">
+            {[
+              { label: "Home", id: "top" },
+              { label: "AI Real Estate", id: "features" },
+              { label: "How it works", id: "how-it-works" },
+              { label: "Pricing", id: "pricing" },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => scrollToSection(item.id)}
+                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-foreground/80 transition-colors hover:bg-accent/70 hover:text-primary"
+              >
+                {item.label}
+              </button>
+            ))}
+            {!isAuthenticated && (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  navigate("/login");
+                }}
+                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-primary transition-colors hover:bg-accent/70"
+              >
+                Log in
+              </button>
+            )}
+          </div>
+        )}
       </header>
 
       {/* ===== Hero ===== */}
@@ -386,7 +482,7 @@ export default function Home() {
       </section>
 
       {/* ===== Features ===== */}
-      <section className="relative py-24">
+      <section id="features" className="relative scroll-mt-24 py-24">
         <div className="container">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
             <h2 className="font-display text-3xl text-foreground sm:text-4xl">
@@ -432,7 +528,7 @@ export default function Home() {
       </section>
 
       {/* ===== How it works ===== */}
-      <section className="relative py-24">
+      <section id="how-it-works" className="relative scroll-mt-24 py-24">
         <div className="container">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
             <h2 className="font-display text-3xl text-foreground sm:text-4xl">
@@ -562,7 +658,7 @@ export default function Home() {
       </section>
 
       {/* ===== Pricing Preview ===== */}
-      <section className="relative py-24">
+      <section id="pricing" className="relative scroll-mt-24 py-24">
         <div className="container">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
             <h2 className="font-display text-3xl text-foreground sm:text-4xl">
@@ -679,7 +775,7 @@ export default function Home() {
               size="lg"
               variant="outline"
               className="btn-springy rounded-full px-8 py-6"
-              onClick={() => startLogin()}
+              onClick={() => scrollToSection("pricing")}
             >
               View pricing
             </Button>
@@ -698,15 +794,15 @@ export default function Home() {
               Create a tour
             </button>
             <button
-              onClick={() => (isAuthenticated ? navigate("/dashboard") : startLogin())}
+              onClick={() => (isAuthenticated ? navigate("/dashboard") : navigate("/login"))}
               className="transition-colors hover:text-primary"
             >
               {isAuthenticated ? "Dashboard" : "Sign in"}
             </button>
-            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+            <button onClick={() => scrollToSection("pricing")} className="transition-colors hover:text-primary">
               Pricing
             </button>
-            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+            <button onClick={() => scrollToSection("how-it-works")} className="transition-colors hover:text-primary">
               How it works
             </button>
           </nav>
