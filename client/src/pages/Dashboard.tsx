@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
 import GenerationTheater, { type TheaterMode } from "@/components/GenerationTheater";
@@ -53,6 +53,7 @@ function StatusBadge({ status }: { status: "processing" | "ready" | "failed" }) 
 
 export default function Dashboard() {
   const { user, loading: authLoading, isAuthenticated } = useAuth();
+  const [, navigate] = useLocation();
   const utils = trpc.useUtils();
 
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("idle");
@@ -92,12 +93,12 @@ export default function Dashboard() {
   const generateMutation = trpc.tour.generate.useMutation();
   const downloadMutation = trpc.tour.getDownloadUrl.useMutation();
 
-  // Redirect anonymous visitors to login.
+  // Redirect anonymous visitors to the sign-in page.
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
-      startLogin();
+      navigate("/login");
     }
-  }, [authLoading, isAuthenticated]);
+  }, [authLoading, isAuthenticated, navigate]);
 
   // ===== One-time draft sync: restore homepage uploads/settings after signup =====
   useEffect(() => {

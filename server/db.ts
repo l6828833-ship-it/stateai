@@ -1,9 +1,11 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
+  InsertAuthCode,
   InsertGenerationJob,
   InsertProjectImage,
   InsertUser,
+  authCodes,
   generationJobs,
   projectImages,
   projects,
@@ -96,6 +98,124 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+// ===================== Email / password auth =====================
+
+/** Look up a user by email (case-sensitive; callers should normalize to lower-case). */
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return rows[0];
+}
+
+/** Create a new email/password user (unverified). Returns the created row. */
+export async function createLocalUser(input: {
+  openId: string;
+  name: string | null;
+  email: string;
+  passwordHash: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(users).values({
+    openId: input.openId,
+    name: input.name,
+    email: input.email,
+    passwordHash: input.passwordHash,
+    loginMethod: "email",
+    role: input.openId === ENV.ownerOpenId ? "admin" : "user",
+  });
+  return getUserByOpenId(input.openId);
+}
+
+/** Update the scrypt password hash for a user. */
+export async function setUserPassword(userId: number, passwordHash: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+}
+
+/** Mark a user's email as verified (idempotent). */
+export async function markEmailVerified(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(users).set({ emailVerified: new Date() }).where(eq(users.id, userId));
+}
+
+// ===================== One-time codes (OTP) =====================
+
+/** Insert a new OTP row. */
+export async function createAuthCode(input: InsertAuthCode) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(authCodes).values(input);
+}
+
+/**
+ * Most recent unconsumed, unexpired code for an email + purpose.
+ * Used both to verify a submitted code and to rate-limit resends.
+ */
+export async function getActiveAuthCode(
+  email: string,
+  purpose: "signup" | "login" | "reset",
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db
+    .select()
+    .from(authCodes)
+    .where(
+      and(
+        eq(authCodes.email, email),
+        eq(authCodes.purpose, purpose),
+        isNull(authCodes.consumedAt),
+        gt(authCodes.expiresAt, new Date()),
+      ),
+    )
+    .orderBy(desc(authCodes.createdAt))
+    .limit(1);
+  return rows[0];
+}
+
+/** Increment the verification-attempt counter for a code. */
+export async function incrementAuthCodeAttempts(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.select().from(authCodes).where(eq(authCodes.id, id)).limit(1);
+  const current = rows[0];
+  if (!current) return;
+  await db
+    .update(authCodes)
+    .set({ attempts: current.attempts + 1 })
+    .where(eq(authCodes.id, id));
+}
+
+/** Mark a code as consumed (single-use). */
+export async function consumeAuthCode(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(authCodes).set({ consumedAt: new Date() }).where(eq(authCodes.id, id));
+}
+
+/** Invalidate any outstanding codes for an email+purpose (e.g. before issuing a new one). */
+export async function invalidateAuthCodes(
+  email: string,
+  purpose: "signup" | "login" | "reset",
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(authCodes)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(authCodes.email, email),
+        eq(authCodes.purpose, purpose),
+        isNull(authCodes.consumedAt),
+      ),
+    );
 }
 
 // ===================== Projects =====================

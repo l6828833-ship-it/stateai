@@ -16,6 +16,13 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
+  /**
+   * scrypt password hash for email/password accounts, in the format
+   * `scrypt$<saltHex>$<hashHex>`. Null for OAuth-only users.
+   */
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  /** When the user's email was verified via OTP. Null = unverified. */
+  emailVerified: timestamp("emailVerified"),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -24,6 +31,26 @@ export const users = mysqlTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * One-time email verification / login codes (OTP). Codes are stored hashed
+ * (never in plaintext). A code is valid until `expiresAt`, has a capped number
+ * of verification `attempts`, and is single-use (`consumedAt` set on success).
+ */
+export const authCodes = mysqlTable("auth_codes", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 320 }).notNull(),
+  /** SHA-256 hash (hex) of the 6-digit code. */
+  codeHash: varchar("codeHash", { length: 128 }).notNull(),
+  purpose: mysqlEnum("purpose", ["signup", "login", "reset"]).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  consumedAt: timestamp("consumedAt"),
+  attempts: int("attempts").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AuthCode = typeof authCodes.$inferSelect;
+export type InsertAuthCode = typeof authCodes.$inferInsert;
 
 /**
  * A tour project groups a user's uploaded photos, settings, and generations.

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
 import { useToolDraft, fileToDataUrl, type DraftImage } from "@/hooks/useToolDraft";
@@ -249,7 +248,7 @@ export default function Home() {
       navigate("/dashboard");
     } else {
       toast("Create a free account to generate — your photos & settings are saved.");
-      setTimeout(() => startLogin(), 600);
+      setTimeout(() => navigate("/signup"), 600);
     }
   };
 
@@ -318,7 +317,7 @@ export default function Home() {
                 <Button
                   variant="ghost"
                   className="btn-springy hidden rounded-full text-foreground/80 sm:inline-flex"
-                  onClick={() => startLogin()}
+                  onClick={() => navigate("/login")}
                 >
                   Log in
                 </Button>
@@ -360,7 +359,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);
-                  startLogin();
+                  navigate("/login");
                 }}
                 className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-primary transition-colors hover:bg-accent/70"
               >
@@ -776,7 +775,7 @@ export default function Home() {
               size="lg"
               variant="outline"
               className="btn-springy rounded-full px-8 py-6"
-              onClick={() => startLogin()}
+              onClick={() => scrollToSection("pricing")}
             >
               View pricing
             </Button>
@@ -795,15 +794,15 @@ export default function Home() {
               Create a tour
             </button>
             <button
-              onClick={() => (isAuthenticated ? navigate("/dashboard") : startLogin())}
+              onClick={() => (isAuthenticated ? navigate("/dashboard") : navigate("/login"))}
               className="transition-colors hover:text-primary"
             >
               {isAuthenticated ? "Dashboard" : "Sign in"}
             </button>
-            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+            <button onClick={() => scrollToSection("pricing")} className="transition-colors hover:text-primary">
               Pricing
             </button>
-            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+            <button onClick={() => scrollToSection("how-it-works")} className="transition-colors hover:text-primary">
               How it works
             </button>
           </nav>
