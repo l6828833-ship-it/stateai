@@ -17,6 +17,8 @@ import {
 import { storagePut } from "../storage";
 import { protectedProcedure, router } from "../_core/trpc";
 
+const tourStyleSchema = z.enum(["Walkthrough", "Drone", "Cinematic"]);
+
 /** Strip server-only fields before returning a job to the client. */
 export function toClientJob(job: NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>) {
   const { optimizedPrompt, openrouterJobId, ...safe } = job;
@@ -57,6 +59,7 @@ export const tourRouter = router({
       z.object({
         projectId: z.number(),
         name: z.string().max(255).optional(),
+        tourStyle: tourStyleSchema.optional(),
         aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "21:9"]).optional(),
       }),
     )
@@ -210,12 +213,15 @@ export const tourRouter = router({
         let optimizedPrompt: string;
         let duration: number;
         try {
-          const analysis = await analyzeAndOptimizePrompt({ images: orderedPublic });
+          const analysis = await analyzeAndOptimizePrompt({
+            images: orderedPublic,
+            tourStyle: project.tourStyle,
+          });
           optimizedPrompt = analysis.optimizedPrompt;
           duration = analysis.duration;
         } catch (e) {
           console.warn("[Generation] Prompt optimization failed, using fallback:", e);
-          optimizedPrompt = buildFallbackPrompt(sorted.length);
+          optimizedPrompt = buildFallbackPrompt(sorted.length, project.tourStyle);
           duration = defaultDurationFor(sorted.length);
         }
 

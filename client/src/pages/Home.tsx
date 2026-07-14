@@ -193,6 +193,7 @@ export default function Home() {
   }));
 
   const settings: ToolSettings = {
+    tourStyle: draft.tourStyle,
     aspectRatio: draft.aspectRatio,
   };
 

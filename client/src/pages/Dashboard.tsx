@@ -10,7 +10,7 @@ import DashboardBottomNav from "@/components/DashboardBottomNav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { loadDraft, clearDraft } from "@/hooks/useToolDraft";
-import type { PlanId } from "@shared/plans";
+import type { PlanId, TourStyleId } from "@shared/plans";
 import {
   BadgeCheck,
   BarChart3,
@@ -117,6 +117,7 @@ export default function Dashboard() {
         // Push settings first.
         await settingsMutation.mutateAsync({
           projectId: project.id,
+          tourStyle: draft.tourStyle as TourStyleId,
           aspectRatio: draft.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9",
         });
         // Upload images strictly one-by-one, in draft order, so the
@@ -236,6 +237,7 @@ export default function Dashboard() {
     );
     settingsMutation.mutate({
       projectId: project.id,
+      ...(patch.tourStyle ? { tourStyle: patch.tourStyle } : {}),
       ...(patch.aspectRatio
         ? { aspectRatio: patch.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9" }
         : {}),
@@ -351,6 +353,7 @@ export default function Dashboard() {
   }));
 
   const settings: ToolSettings = {
+    tourStyle: (project?.tourStyle ?? "Walkthrough") as TourStyleId,
     aspectRatio: project?.aspectRatio ?? "16:9",
   };
 
@@ -400,7 +403,7 @@ export default function Dashboard() {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-foreground">
-                  AI-directed tour · {job.resolution}
+                  {job.tourStyle} tour · {job.resolution}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {new Date(job.createdAt).toLocaleString()}

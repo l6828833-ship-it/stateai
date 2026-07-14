@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { TourStyleId } from "@shared/plans";
 
 /**
  * Guest draft state persisted in localStorage. When an unauthenticated user
@@ -19,6 +20,7 @@ export interface DraftImage {
 
 export interface ToolDraft {
   images: DraftImage[];
+  tourStyle: TourStyleId;
   aspectRatio: string;
   /** Set when the user clicked Generate while logged out. */
   pendingGenerate: boolean;
@@ -28,6 +30,7 @@ const STORAGE_KEY = "estatetour_draft_v1";
 
 export const EMPTY_DRAFT: ToolDraft = {
   images: [],
+  tourStyle: "Walkthrough",
   aspectRatio: "16:9",
   pendingGenerate: false,
 };
