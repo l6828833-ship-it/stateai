@@ -268,6 +268,53 @@
   }
   .animate-ken-burns { animation: ken-burns 9s var(--ease-in-out-soft) infinite alternate; }
 
+  /* Floating status chip drift */
+  @keyframes chip-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+  .animate-chip-float { animation: chip-float 5s ease-in-out infinite; }
+
+  /* Pulsing live dot */
+  @keyframes dot-pulse {
+    0% { box-shadow: 0 0 0 0 oklch(0.76 0.1 358 / 0.55); }
+    70% { box-shadow: 0 0 0 9px oklch(0.76 0.1 358 / 0); }
+    100% { box-shadow: 0 0 0 0 oklch(0.76 0.1 358 / 0); }
+  }
+  .animate-dot-pulse { animation: dot-pulse 2s ease-out infinite; }
+
+  /* Scrubbing playhead across a track */
+  @keyframes scrub-slide {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(150%); }
+    100% { transform: translateX(-100%); }
+  }
+  .animate-scrub { animation: scrub-slide 5.5s ease-in-out infinite; }
+
+  /* Slow vertical bob for decorative chips */
+  @keyframes float-soft {
+    0%, 100% { transform: translateY(0) rotate(var(--float-rot, 0deg)); }
+    50% { transform: translateY(-10px) rotate(var(--float-rot, 0deg)); }
+  }
+  .animate-float-soft { animation: float-soft 6s ease-in-out infinite; }
+
+  /* Gradient text sheen sweep */
+  @keyframes text-sheen {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  .animate-text-sheen {
+    background-size: 200% auto;
+    animation: text-sheen 6s linear infinite;
+  }
+
+  /* Marquee for the trusted-by strip */
+  @keyframes marquee-x {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  .animate-marquee { animation: marquee-x 22s linear infinite; }
+
   .reveal-on-scroll {
     opacity: 0;
     transform: translateY(28px);
