@@ -55,7 +55,27 @@ async function issueCode(email: string, purpose: "signup" | "login") {
     purpose,
     expiresAt: otpExpiryDate(),
   });
-  await sendOtpEmail(email, code, purpose);
+
+  const result = await sendOtpEmail(email, code, purpose);
+  if (!result.ok) {
+    // Surface the real provider error instead of pretending the code was sent.
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `We couldn't send the verification email. ${result.error ?? "Please try again shortly."}`,
+    });
+  }
+  if (result.skipped) {
+    // Email provider not configured — fail loudly in production so users aren't
+    // stuck waiting for a code that will never arrive.
+    if (process.env.NODE_ENV === "production") {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message:
+          "Email delivery is not configured (BREVO_API_KEY is missing). Please contact support.",
+      });
+    }
+    console.warn(`[auth] DEV ONLY — OTP for ${email} (${purpose}): ${code}`);
+  }
 }
 
 export const authRouter = router({
