@@ -2,9 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { MAX_IMAGES } from "@shared/plans";
 import * as db from "../db";
+import { analyzeAndOptimizePrompt, buildFallbackPrompt } from "../inworld";
 import {
-  analyzeAndOptimizePrompt,
-  buildFallbackPrompt,
   downloadSeedanceVideo,
   pollSeedanceJob,
   submitSeedanceVideo,

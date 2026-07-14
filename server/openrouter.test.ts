@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { verifyOpenRouterKey, buildFallbackPrompt } from "./openrouter";
+import { verifyOpenRouterKey } from "./openrouter";
+import { buildFallbackPrompt } from "./inworld";
 
 describe("OpenRouter credentials", () => {
   it("OPENROUTER_API_KEY is present and well-formed", () => {

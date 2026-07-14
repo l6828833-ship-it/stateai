@@ -53,16 +53,28 @@ function resolveSender(): { name: string; email: string } {
   };
 }
 
-/** Returns true when the message was accepted (or logged in dev). */
-export async function sendEmail(input: SendEmailInput): Promise<boolean> {
+export type SendEmailResult = {
+  /** True when Brevo accepted the message, or when logged in dev mode. */
+  ok: boolean;
+  /** True when no provider was configured and the email was only logged. */
+  skipped?: boolean;
+  /** Human-readable failure reason (surfaced to the caller on failure). */
+  error?: string;
+};
+
+/**
+ * Send an email via Brevo. Returns a structured result so callers can react to
+ * (and surface) delivery failures instead of them being silently swallowed.
+ */
+export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const apiKey = process.env.BREVO_API_KEY;
 
   if (!apiKey) {
-    console.log(
-      `\n[email:dev] (BREVO_API_KEY not set — logging instead of sending)\n` +
+    console.warn(
+      `\n[email] BREVO_API_KEY is NOT set — the email was NOT sent, only logged.\n` +
         `  To: ${input.to}\n  Subject: ${input.subject}\n  ${input.text}\n`,
     );
-    return true;
+    return { ok: true, skipped: true };
   }
 
   const sender = resolveSender();
@@ -83,15 +95,30 @@ export async function sendEmail(input: SendEmailInput): Promise<boolean> {
         textContent: input.text,
       }),
     });
+
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.warn(`[email] Brevo failed (${res.status} ${res.statusText}): ${detail}`);
-      return false;
+      // Extract Brevo's human message (e.g. "Sender not valid", IP not allowed).
+      let reason = detail;
+      try {
+        const parsed = JSON.parse(detail) as { message?: string; code?: string };
+        reason = parsed.message || parsed.code || detail;
+      } catch {
+        /* keep raw detail */
+      }
+      console.warn(
+        `[email] Brevo REJECTED the send: ${res.status} ${res.statusText} — ${detail} ` +
+          `(sender=${sender.email}, to=${input.to})`,
+      );
+      return { ok: false, error: `Brevo ${res.status}: ${reason}` };
     }
-    return true;
+
+    console.log(`[email] Brevo accepted message to ${input.to} (from ${sender.email})`);
+    return { ok: true };
   } catch (error) {
-    console.warn("[email] Error sending via Brevo:", error);
-    return false;
+    const msg = error instanceof Error ? error.message : String(error);
+    console.warn("[email] Network error calling Brevo:", msg);
+    return { ok: false, error: `Brevo request error: ${msg}` };
   }
 }
 
@@ -115,7 +142,7 @@ export async function sendOtpEmail(
   to: string,
   code: string,
   purpose: "signup" | "login" | "reset",
-): Promise<boolean> {
+): Promise<SendEmailResult> {
   const intro =
     purpose === "signup"
       ? "Welcome to EstateTour AI! Use the code below to verify your email and finish creating your account."
