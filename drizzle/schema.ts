@@ -75,8 +75,12 @@ export const projects = pgTable("projects", {
   tourStyle: tourStyleEnum("tourStyle").default("Walkthrough").notNull(),
   /** Optional creative direction text from the user (prompt style) */
   creativeText: text("creativeText"),
-  /** Video settings */
-  resolution: varchar("resolution", { length: 16 }).default("720p").notNull(),
+  /**
+   * Video settings. Resolution is always 1080p (not user-configurable) and
+   * clipDuration is decided per-generation by the AI, so these are effectively
+   * defaults/record-keeping — the generation path forces 1080p + AI length.
+   */
+  resolution: varchar("resolution", { length: 16 }).default("1080p").notNull(),
   aspectRatio: varchar("aspectRatio", { length: 8 }).default("16:9").notNull(),
   clipDuration: integer("clipDuration").default(5).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

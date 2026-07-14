@@ -2,9 +2,14 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { MAX_IMAGES } from "@shared/plans";
 import * as db from "../db";
-import { analyzeAndOptimizePrompt, buildFallbackPrompt } from "../inworld";
+import {
+  analyzeAndOptimizePrompt,
+  buildFallbackPrompt,
+  defaultDurationFor,
+} from "../inworld";
 import {
   downloadSeedanceVideo,
+  OUTPUT_RESOLUTION,
   pollSeedanceJob,
   submitSeedanceVideo,
   type OrderedImage,
@@ -55,10 +60,7 @@ export const tourRouter = router({
         projectId: z.number(),
         name: z.string().max(255).optional(),
         tourStyle: tourStyleSchema.optional(),
-        creativeText: z.string().max(2000).nullable().optional(),
-        resolution: z.enum(["480p", "720p", "1080p"]).optional(),
         aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "21:9"]).optional(),
-        clipDuration: z.number().int().min(4).max(15).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -188,15 +190,16 @@ export const tourRouter = router({
         }
       }
 
-      // Create the job row first so failures are tracked.
+      // Create the job row first so failures are tracked. Resolution is always
+      // 1080p; clipDuration is a placeholder until the AI decides the ideal one.
       const job = await db.createGenerationJob({
         projectId: project.id,
         userId: ctx.user.id,
         status: "processing",
         tourStyle: project.tourStyle,
-        resolution: project.resolution,
+        resolution: OUTPUT_RESOLUTION,
         aspectRatio: project.aspectRatio,
-        clipDuration: project.clipDuration,
+        clipDuration: defaultDurationFor(sorted.length),
         imageSequence: JSON.stringify(sorted.map((i) => i.id)),
         thumbnailUrl: sorted[0]?.url ?? null,
       });
@@ -204,37 +207,34 @@ export const tourRouter = router({
       try {
         const orderedPublic = await toPublicOrderedImages(sorted);
 
-        // HIDDEN STEP — prompt optimization. Failure falls back to a solid
-        // template prompt rather than blocking the paid generation.
+        // HIDDEN STEP — Claude Sonnet analyzes the photos and decides the camera
+        // movement, the optimized prompt AND the ideal clip length. Failure
+        // falls back to a solid template rather than blocking paid generation.
         let optimizedPrompt: string;
+        let duration: number;
         try {
           const analysis = await analyzeAndOptimizePrompt({
             images: orderedPublic,
             tourStyle: project.tourStyle,
-            creativeText: project.creativeText,
-            clipDuration: project.clipDuration,
           });
           optimizedPrompt = analysis.optimizedPrompt;
+          duration = analysis.duration;
         } catch (e) {
           console.warn("[Generation] Prompt optimization failed, using fallback:", e);
-          optimizedPrompt = buildFallbackPrompt(
-            sorted.length,
-            project.tourStyle,
-            project.creativeText,
-            project.clipDuration,
-          );
+          optimizedPrompt = buildFallbackPrompt(sorted.length, project.tourStyle);
+          duration = defaultDurationFor(sorted.length);
         }
 
         const submission = await submitSeedanceVideo({
           prompt: optimizedPrompt,
           images: orderedPublic,
-          duration: project.clipDuration,
-          resolution: project.resolution,
+          duration,
           aspectRatio: project.aspectRatio,
         });
 
         await db.updateGenerationJob(job.id, {
           optimizedPrompt,
+          clipDuration: duration,
           openrouterJobId: submission.jobId,
         });
 

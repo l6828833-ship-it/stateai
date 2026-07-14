@@ -415,6 +415,7 @@ export async function updateGenerationJob(
   patch: Partial<{
     status: "processing" | "ready" | "failed";
     optimizedPrompt: string;
+    clipDuration: number;
     openrouterJobId: string;
     videoKey: string;
     videoUrl: string;

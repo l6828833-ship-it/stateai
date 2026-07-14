@@ -118,20 +118,21 @@ export default function Dashboard() {
         await settingsMutation.mutateAsync({
           projectId: project.id,
           tourStyle: draft.tourStyle as TourStyleId,
-          creativeText: draft.creativeText || null,
-          resolution: draft.resolution as "480p" | "720p" | "1080p",
           aspectRatio: draft.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9",
-          clipDuration: draft.clipDuration,
         });
         // Upload images strictly one-by-one, in draft order, so the
         // server-assigned sequence indexes match the user's arrangement.
+        // Preserve each photo's original format/quality on upload.
         for (const img of draft.images) {
           const base64 = img.dataUrl.split(",")[1] ?? "";
           if (!base64) continue;
+          const mimeType = /^image\/(jpeg|png|webp)$/.test(img.mimeType)
+            ? img.mimeType
+            : "image/jpeg";
           await uploadMutation.mutateAsync({
             projectId: project.id,
             fileName: img.fileName,
-            mimeType: "image/jpeg",
+            mimeType,
             base64Data: base64,
             roomTag: img.roomTag,
           });
@@ -237,12 +238,9 @@ export default function Dashboard() {
     settingsMutation.mutate({
       projectId: project.id,
       ...(patch.tourStyle ? { tourStyle: patch.tourStyle } : {}),
-      ...(patch.creativeText !== undefined ? { creativeText: patch.creativeText || null } : {}),
-      ...(patch.resolution ? { resolution: patch.resolution as "480p" | "720p" | "1080p" } : {}),
       ...(patch.aspectRatio
         ? { aspectRatio: patch.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9" }
         : {}),
-      ...(patch.clipDuration ? { clipDuration: patch.clipDuration } : {}),
     });
   };
 
@@ -356,10 +354,7 @@ export default function Dashboard() {
 
   const settings: ToolSettings = {
     tourStyle: (project?.tourStyle ?? "Walkthrough") as TourStyleId,
-    creativeText: project?.creativeText ?? "",
-    resolution: project?.resolution ?? "720p",
     aspectRatio: project?.aspectRatio ?? "16:9",
-    clipDuration: project?.clipDuration ?? 5,
   };
 
   const firstImageUrl = toolImages[0]?.previewUrl ?? null;

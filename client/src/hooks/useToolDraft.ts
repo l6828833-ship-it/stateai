@@ -21,10 +21,7 @@ export interface DraftImage {
 export interface ToolDraft {
   images: DraftImage[];
   tourStyle: TourStyleId;
-  creativeText: string;
-  resolution: string;
   aspectRatio: string;
-  clipDuration: number;
   /** Set when the user clicked Generate while logged out. */
   pendingGenerate: boolean;
 }
@@ -34,10 +31,7 @@ const STORAGE_KEY = "estatetour_draft_v1";
 export const EMPTY_DRAFT: ToolDraft = {
   images: [],
   tourStyle: "Walkthrough",
-  creativeText: "",
-  resolution: "720p",
   aspectRatio: "16:9",
-  clipDuration: 5,
   pendingGenerate: false,
 };
 
@@ -94,18 +88,27 @@ export function useToolDraft() {
   return { draft, update, setDraft };
 }
 
-/** Read a File as a data URL (downscaled to keep localStorage manageable). */
-export function fileToDataUrl(file: File, maxDim = 1600): Promise<string> {
+/**
+ * Read a File as a data URL, preserving the ORIGINAL image untouched whenever
+ * possible (no re-encoding, no cropping, original format & full resolution).
+ * We only ever downscale when a photo is extremely large — and even then we
+ * use a high dimension cap and near-lossless quality, so the reference image
+ * fed to the video model stays faithful to what the user uploaded.
+ */
+export function fileToDataUrl(file: File, maxDim = 3072): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Failed to read file"));
     reader.onload = () => {
+      const original = reader.result as string;
       const img = new Image();
-      img.onerror = () => reject(new Error("Invalid image"));
+      // If we can't measure it, keep the original bytes as-is.
+      img.onerror = () => resolve(original);
       img.onload = () => {
         const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        // Within the cap → return the untouched original (best quality).
         if (scale >= 1) {
-          resolve(reader.result as string);
+          resolve(original);
           return;
         }
         const canvas = document.createElement("canvas");
@@ -113,13 +116,16 @@ export function fileToDataUrl(file: File, maxDim = 1600): Promise<string> {
         canvas.height = Math.round(img.height * scale);
         const ctx = canvas.getContext("2d");
         if (!ctx) {
-          resolve(reader.result as string);
+          resolve(original);
           return;
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.85));
+        // Near-lossless re-encode only for the oversized case.
+        resolve(canvas.toDataURL("image/jpeg", 0.95));
       };
-      img.src = reader.result as string;
+      img.src = original;
     };
     reader.readAsDataURL(file);
   });

@@ -34,6 +34,10 @@ function getVisionModel(): string {
   return process.env.INWORLD_VISION_MODEL || "anthropic/claude-sonnet-4-6";
 }
 
+/** Kling supports up to 15s clips; the AI picks the ideal length in this range. */
+export const MIN_CLIP_DURATION = 4;
+export const MAX_CLIP_DURATION = 15;
+
 export interface AnalysisResult {
   /** Per-photo structured plan (room type, camera move, etc.) */
   sequence: Array<{
@@ -45,6 +49,19 @@ export interface AnalysisResult {
   }>;
   /** The single combined, optimized prompt for Seedance. */
   optimizedPrompt: string;
+  /** AI-decided ideal clip length in seconds, clamped to [MIN,MAX]. */
+  duration: number;
+}
+
+/** Clamp any duration into the valid Kling range and round to a whole second. */
+export function clampDuration(value: number | undefined | null): number {
+  if (!value || !Number.isFinite(value)) return MIN_CLIP_DURATION;
+  return Math.max(MIN_CLIP_DURATION, Math.min(MAX_CLIP_DURATION, Math.round(value)));
+}
+
+/** Sensible fallback length when the AI does not return one (scales with photo count). */
+export function defaultDurationFor(imageCount: number): number {
+  return clampDuration(Math.min(MAX_CLIP_DURATION, 4 + imageCount * 2));
 }
 
 const STYLE_DIRECTION: Record<TourStyle, string> = {
@@ -63,10 +80,8 @@ const STYLE_DIRECTION: Record<TourStyle, string> = {
 export async function analyzeAndOptimizePrompt(params: {
   images: OrderedImage[];
   tourStyle: TourStyle;
-  creativeText?: string | null;
-  clipDuration: number;
 }): Promise<AnalysisResult> {
-  const { images, tourStyle, creativeText, clipDuration } = params;
+  const { images, tourStyle } = params;
   if (images.length === 0) throw new Error("No images provided for analysis");
 
   // Enforce strict ordering before anything is sent.
@@ -89,13 +104,12 @@ export async function analyzeAndOptimizePrompt(params: {
     type: "text",
     text: [
       `Analyze these real estate photos as ONE property, in the exact order given (the order is fixed and must not be changed).`,
-      `The goal is a ${clipDuration}-second AI-generated video presenting the property as ${STYLE_DIRECTION[tourStyle]}.`,
-      creativeText?.trim()
-        ? `The client added this creative direction, honor it where safe: "${creativeText.trim()}"`
-        : ``,
+      `The goal is an AI-generated video presenting the property as ${STYLE_DIRECTION[tourStyle]}.`,
+      `You are the director. Decide everything creative yourself from what you see in the photos — the client did NOT provide any creative direction.`,
       `For each photo decide the safest, most impressive camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) — NEVER a move that would pass through an unseen doorway or invent unseen space.`,
-      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the photos in order, with concrete motion, lighting and composition language. It must instruct the model to preserve the exact rooms, furniture, materials and layout visible in the reference photos, transitioning between them in the given order.`,
-      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string}`,
+      `Also decide the IDEAL total video length in whole seconds ("duration"), between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds (the Kling model's maximum is ${MAX_CLIP_DURATION}s). Base it on how many photos there are and how much each scene needs to breathe — enough time for smooth, unhurried motion across every photo, but never padded.`,
+      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the photos in order, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the photos in the given order.`,
+      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"duration":number}`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -124,7 +138,11 @@ export async function analyzeAndOptimizePrompt(params: {
   };
   const raw = data.choices?.[0]?.message?.content ?? "";
   const jsonText = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
-  let parsed: { sequence?: AnalysisResult["sequence"]; optimized_prompt?: string };
+  let parsed: {
+    sequence?: AnalysisResult["sequence"];
+    optimized_prompt?: string;
+    duration?: number;
+  };
   try {
     parsed = JSON.parse(jsonText);
   } catch {
@@ -133,28 +151,27 @@ export async function analyzeAndOptimizePrompt(params: {
   }
 
   const optimizedPrompt =
-    parsed.optimized_prompt?.trim() ||
-    buildFallbackPrompt(ordered.length, tourStyle, creativeText, clipDuration);
+    parsed.optimized_prompt?.trim() || buildFallbackPrompt(ordered.length, tourStyle);
+
+  // AI-decided length, clamped to the valid Kling range; fall back to a
+  // photo-count-based default if the model omitted or fumbled it.
+  const duration =
+    typeof parsed.duration === "number"
+      ? clampDuration(parsed.duration)
+      : defaultDurationFor(ordered.length);
 
   return {
     sequence: parsed.sequence ?? [],
     optimizedPrompt,
+    duration,
   };
 }
 
-export function buildFallbackPrompt(
-  imageCount: number,
-  tourStyle: TourStyle,
-  creativeText: string | null | undefined,
-  clipDuration: number,
-): string {
+export function buildFallbackPrompt(imageCount: number, tourStyle: TourStyle): string {
   return [
-    `A ${clipDuration}-second professional real estate video presenting the property in the ${imageCount} reference photos, in their exact given order, as ${STYLE_DIRECTION[tourStyle]}.`,
-    `Preserve the exact rooms, furniture, materials, and layout visible in the reference photos. Smooth, slow, stable camera motion with soft natural lighting. No people, no text overlays.`,
-    creativeText?.trim() ? `Creative direction: ${creativeText.trim()}` : ``,
-  ]
-    .filter(Boolean)
-    .join(" ");
+    `A professional real estate video presenting the property in the ${imageCount} reference photos, in their exact given order, as ${STYLE_DIRECTION[tourStyle]}.`,
+    `Preserve the exact rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, or added/removed objects — keep the photos pixel-faithful and only move the camera. Smooth, slow, stable camera motion with soft natural lighting. No people, no text overlays.`,
+  ].join(" ");
 }
 
 /** Lightweight credential check — lists models, costs nothing. */
