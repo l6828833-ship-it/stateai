@@ -16,7 +16,7 @@
  * Auth: Inworld uses HTTP Basic with the Base64 key copied from the portal:
  *   Authorization: Basic <INWORLD_API_KEY>
  */
-import type { OrderedImage, TourStyle } from "./openrouter";
+import type { OrderedImage } from "./openrouter";
 
 const INWORLD_BASE = "https://api.inworld.ai/v1";
 
@@ -39,10 +39,12 @@ export const MIN_CLIP_DURATION = 4;
 export const MAX_CLIP_DURATION = 15;
 
 export interface AnalysisResult {
-  /** Per-photo structured plan (room type, camera move, etc.) */
+  /** Per-photo structured plan (room type, AI-chosen style, camera move, etc.) */
   sequence: Array<{
     photo_index: number;
     room_type: string;
+    /** Cinematic style the AI picked for this specific shot. */
+    style: string;
     camera_move: string;
     target: string;
     shot_prompt: string;
@@ -64,24 +66,15 @@ export function defaultDurationFor(imageCount: number): number {
   return clampDuration(Math.min(MAX_CLIP_DURATION, 4 + imageCount * 2));
 }
 
-const STYLE_DIRECTION: Record<TourStyle, string> = {
-  Walkthrough:
-    "an interior walkthrough tour: smooth first-person gimbal movement through the home, gentle push-ins and pans, camera always stays inside rooms and never passes through unseen doorways",
-  Drone:
-    "an aerial drone tour: sweeping cinematic drone shots, slow orbits and reveals, rising establishing movements, smooth altitude changes",
-  Cinematic:
-    "a cinematic property film: dramatic slow camera moves, shallow depth of field feel, elegant push-ins toward hero details, warm golden-hour grading",
-};
-
 /**
  * HIDDEN STEP — analyze all photos together (relational ordering matters) and
- * produce one optimized Seedance prompt. Never expose the output to clients.
+ * produce one optimized Seedance prompt. The AI acts as the director and picks
+ * the best cinematic style + camera move for EACH scene. Never expose to clients.
  */
 export async function analyzeAndOptimizePrompt(params: {
   images: OrderedImage[];
-  tourStyle: TourStyle;
 }): Promise<AnalysisResult> {
-  const { images, tourStyle } = params;
+  const { images } = params;
   if (images.length === 0) throw new Error("No images provided for analysis");
 
   // Enforce strict ordering before anything is sent.
@@ -104,12 +97,15 @@ export async function analyzeAndOptimizePrompt(params: {
     type: "text",
     text: [
       `Analyze these real estate photos as ONE property, in the exact order given (the order is fixed and must not be changed).`,
-      `The goal is an AI-generated video presenting the property as ${STYLE_DIRECTION[tourStyle]}.`,
-      `You are the director. Decide everything creative yourself from what you see in the photos — the client did NOT provide any creative direction.`,
-      `For each photo decide the safest, most impressive camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) — NEVER a move that would pass through an unseen doorway or invent unseen space.`,
-      `Also decide the IDEAL total video length in whole seconds ("duration"), between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds (the Kling model's maximum is ${MAX_CLIP_DURATION}s). Base it on how many photos there are and how much each scene needs to breathe — enough time for smooth, unhurried motion across every photo, but never padded.`,
-      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the photos in order, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the photos in the given order.`,
-      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"duration":number}`,
+      `You are the film director. The client chose NO style and NO length — you decide everything creative from what you actually see in each photo.`,
+      `First identify what each photo shows (e.g. exterior facade, front yard, aerial/rooftop view, living room, kitchen, bedroom, bathroom, backyard, pool) and then pick the most impressive, appropriate cinematic treatment for EACH one:`,
+      `- Exteriors, aerial shots and large outdoor spaces → sweeping drone-style aerial reveals, slow orbits, and rising establishing moves.`,
+      `- Interior rooms → smooth first-person walkthrough glides with gentle push-ins and pans; the camera stays inside the room and NEVER passes through an unseen doorway or invents unseen space.`,
+      `- Hero details and feature spaces → elegant, slow cinematic push-ins with warm, filmic lighting.`,
+      `For each photo choose the single safest, most flattering camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) and note the chosen style.`,
+      `Also decide the IDEAL total video length in whole seconds ("duration"), between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds (the Kling model's maximum is ${MAX_CLIP_DURATION}s). Base it on how many photos there are and how much each scene needs to breathe — enough for smooth, unhurried motion across every photo, but never padded.`,
+      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the photos in order, smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the photos in the given order.`,
+      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"duration":number}`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -151,7 +147,7 @@ export async function analyzeAndOptimizePrompt(params: {
   }
 
   const optimizedPrompt =
-    parsed.optimized_prompt?.trim() || buildFallbackPrompt(ordered.length, tourStyle);
+    parsed.optimized_prompt?.trim() || buildFallbackPrompt(ordered.length);
 
   // AI-decided length, clamped to the valid Kling range; fall back to a
   // photo-count-based default if the model omitted or fumbled it.
@@ -167,10 +163,11 @@ export async function analyzeAndOptimizePrompt(params: {
   };
 }
 
-export function buildFallbackPrompt(imageCount: number, tourStyle: TourStyle): string {
+export function buildFallbackPrompt(imageCount: number): string {
   return [
-    `A professional real estate video presenting the property in the ${imageCount} reference photos, in their exact given order, as ${STYLE_DIRECTION[tourStyle]}.`,
-    `Preserve the exact rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, or added/removed objects — keep the photos pixel-faithful and only move the camera. Smooth, slow, stable camera motion with soft natural lighting. No people, no text overlays.`,
+    `A professional cinematic real estate video presenting the property in the ${imageCount} reference photos, in their exact given order.`,
+    `The camera intelligently adapts to each scene — sweeping aerial drone reveals and slow orbits for exteriors and outdoor spaces, smooth first-person glides through interior rooms (never passing through unseen doorways), and elegant push-ins on feature details — with soft, natural, filmic lighting.`,
+    `Preserve the exact rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, or added/removed objects — keep the photos pixel-faithful and only move the camera. Smooth, slow, stable motion. No people, no text overlays.`,
   ].join(" ");
 }
 
