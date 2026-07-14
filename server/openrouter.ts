@@ -15,9 +15,23 @@
  */
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const SEEDANCE_MODEL = "bytedance/seedance-2.0";
-/** Vision LLM used for the hidden prompt optimization step. */
-const OPTIMIZER_MODEL = "anthropic/claude-sonnet-4.5";
+
+/**
+ * Video (animation) model. Override with the OPENROUTER_VIDEO_MODEL env var.
+ * Default: bytedance/seedance-2.0.
+ */
+function getVideoModel(): string {
+  return process.env.OPENROUTER_VIDEO_MODEL || "bytedance/seedance-2.0";
+}
+
+/**
+ * Vision LLM used for the hidden image-analysis / prompt-optimization step.
+ * Override with the OPENROUTER_VISION_MODEL env var.
+ * Default: anthropic/claude-sonnet-4.6.
+ */
+function getVisionModel(): string {
+  return process.env.OPENROUTER_VISION_MODEL || "anthropic/claude-sonnet-4.6";
+}
 
 function getApiKey(): string {
   const key = process.env.OPENROUTER_API_KEY ?? "";
@@ -109,7 +123,7 @@ export async function analyzeAndOptimizePrompt(params: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: OPTIMIZER_MODEL,
+      model: getVisionModel(),
       max_tokens: 4000,
       messages: [{ role: "user", content }],
       response_format: { type: "json_object" },
@@ -188,7 +202,7 @@ export async function submitSeedanceVideo(params: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: SEEDANCE_MODEL,
+      model: getVideoModel(),
       prompt,
       duration,
       resolution,
