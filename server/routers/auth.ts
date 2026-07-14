@@ -212,17 +212,31 @@ export const authRouter = router({
         });
       }
 
-      await db.consumeAuthCode(record.id);
-
       const user = await db.getUserByEmail(input.email);
       if (!user) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Account not found." });
       }
 
+      // Sign the session BEFORE consuming the code. If signing fails (e.g.
+      // JWT_SECRET is missing), the code stays valid so the user can retry
+      // once the server is configured, rather than burning a correct code.
+      try {
+        await establishSession(ctx, user);
+      } catch (e) {
+        console.error("[auth] Failed to create session token:", e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            e instanceof Error && e.message.includes("JWT_SECRET")
+              ? e.message
+              : "Could not create your session. Please try again shortly.",
+        });
+      }
+
       if (!user.emailVerified) {
         await db.markEmailVerified(user.id);
       }
-      await establishSession(ctx, user);
+      await db.consumeAuthCode(record.id);
 
       const fresh = (await db.getUserByEmail(input.email)) ?? user;
       return { ok: true, user: sanitizeUser(fresh) } as const;
