@@ -1,6 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { MAX_IMAGES } from "@shared/plans";
+import {
+  MAX_IMAGE_BASE64_LENGTH,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_SIZE_MB,
+  MAX_IMAGES,
+} from "@shared/plans";
 import * as db from "../db";
 import {
   analyzeAndOptimizePrompt,
@@ -16,6 +21,146 @@ import {
 } from "../openrouter";
 import { storagePut } from "../storage";
 import { protectedProcedure, router } from "../_core/trpc";
+
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
+function decodeCanonicalBase64(value: string): Buffer | null {
+  if (value.length === 0 || value.length % 4 !== 0) return null;
+  const decoded = Buffer.from(value, "base64");
+  return decoded.toString("base64") === value ? decoded : null;
+}
+
+function isJpegStartOfFrame(marker: number): boolean {
+  return (
+    marker >= 0xc0 &&
+    marker <= 0xcf &&
+    marker !== 0xc4 &&
+    marker !== 0xc8 &&
+    marker !== 0xcc
+  );
+}
+
+function isValidJpeg(buffer: Buffer): boolean {
+  const endMarker = Buffer.from([0xff, 0xd9]);
+  if (
+    buffer.length < 64 ||
+    buffer[0] !== 0xff ||
+    buffer[1] !== 0xd8 ||
+    buffer.lastIndexOf(endMarker) < 3
+  ) {
+    return false;
+  }
+
+  let offset = 2;
+  let foundFrame = false;
+  while (offset < buffer.length) {
+    while (offset < buffer.length && buffer[offset] === 0xff) offset++;
+    if (offset >= buffer.length) return false;
+    const marker = buffer[offset++];
+    if (marker === 0xd9) return false;
+    if (marker === 0xda) {
+      if (!foundFrame || offset + 2 > buffer.length) return false;
+      const scanHeaderLength = buffer.readUInt16BE(offset);
+      const scanDataStart = offset + scanHeaderLength;
+      return (
+        scanHeaderLength >= 2 &&
+        scanDataStart < buffer.length &&
+        buffer.lastIndexOf(endMarker) > scanDataStart
+      );
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > buffer.length) return false;
+
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > buffer.length) return false;
+    if (isJpegStartOfFrame(marker)) {
+      if (segmentLength < 7) return false;
+      const height = buffer.readUInt16BE(offset + 3);
+      const width = buffer.readUInt16BE(offset + 5);
+      if (width === 0 || height === 0) return false;
+      foundFrame = true;
+    }
+    offset += segmentLength;
+  }
+  return false;
+}
+
+function isValidPng(buffer: Buffer): boolean {
+  if (
+    buffer.length < 45 ||
+    !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
+  ) {
+    return false;
+  }
+
+  let offset = PNG_SIGNATURE.length;
+  let foundHeader = false;
+  let foundImageData = false;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const chunkEnd = offset + 12 + length;
+    if (chunkEnd > buffer.length) return false;
+
+    if (type === "IHDR") {
+      if (foundHeader || offset !== PNG_SIGNATURE.length || length !== 13) return false;
+      if (buffer.readUInt32BE(offset + 8) === 0 || buffer.readUInt32BE(offset + 12) === 0) {
+        return false;
+      }
+      foundHeader = true;
+    } else if (type === "IDAT") {
+      if (!foundHeader || length === 0) return false;
+      foundImageData = true;
+    } else if (type === "IEND") {
+      return foundHeader && foundImageData && length === 0 && chunkEnd === buffer.length;
+    }
+    offset = chunkEnd;
+  }
+  return false;
+}
+
+function isValidWebp(buffer: Buffer): boolean {
+  if (
+    buffer.length < 30 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP" ||
+    buffer.readUInt32LE(4) + 8 !== buffer.length
+  ) {
+    return false;
+  }
+
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const type = buffer.toString("ascii", offset, offset + 4);
+    const length = buffer.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    const chunkEnd = dataStart + length;
+    if (chunkEnd > buffer.length) return false;
+
+    if (type === "VP8 " && length >= 10) {
+      const hasFrameHeader =
+        buffer[dataStart + 3] === 0x9d &&
+        buffer[dataStart + 4] === 0x01 &&
+        buffer[dataStart + 5] === 0x2a;
+      const width = buffer.readUInt16LE(dataStart + 6) & 0x3fff;
+      const height = buffer.readUInt16LE(dataStart + 8) & 0x3fff;
+      return hasFrameHeader && width > 0 && height > 0;
+    }
+    if (type === "VP8L" && length >= 5) return buffer[dataStart] === 0x2f;
+    if (type === "VP8X" && length < 10) return false;
+    offset = chunkEnd + (length % 2);
+  }
+  return false;
+}
+
+function hasValidImageStructure(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/jpeg") return isValidJpeg(buffer);
+  if (mimeType === "image/png") return isValidPng(buffer);
+  if (mimeType === "image/webp") return isValidWebp(buffer);
+  return false;
+}
 
 /** Strip server-only fields before returning a job to the client. */
 export function toClientJob(job: NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>) {
@@ -79,7 +224,13 @@ export const tourRouter = router({
         projectId: z.number(),
         fileName: z.string().max(255),
         mimeType: z.string().regex(/^image\/(jpeg|png|webp)$/),
-        base64Data: z.string().max(15_000_000), // ~10MB binary
+        base64Data: z
+          .string()
+          .min(1, "Image data is empty")
+          .max(
+            MAX_IMAGE_BASE64_LENGTH,
+            `Image is too large. Maximum size is ${MAX_IMAGE_SIZE_MB} MB`,
+          ),
         roomTag: z.string().max(64).optional(),
       }),
     )
@@ -95,9 +246,21 @@ export const tourRouter = router({
         });
       }
 
-      const buffer = Buffer.from(input.base64Data, "base64");
-      if (buffer.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file" });
+      const buffer = decodeCanonicalBase64(input.base64Data);
+      if (!buffer) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Image data is invalid" });
+      }
+      if (buffer.length > MAX_IMAGE_BYTES) {
+        throw new TRPCError({
+          code: "PAYLOAD_TOO_LARGE",
+          message: `Image is too large. Maximum size is ${MAX_IMAGE_SIZE_MB} MB`,
+        });
+      }
+      if (!hasValidImageStructure(buffer, input.mimeType)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Image is invalid or its file type does not match its contents",
+        });
       }
 
       const ext = input.mimeType === "image/png" ? "png" : input.mimeType === "image/webp" ? "webp" : "jpg";
