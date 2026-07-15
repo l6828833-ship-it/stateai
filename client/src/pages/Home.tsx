@@ -5,6 +5,7 @@ import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTo
 import { Button } from "@/components/ui/button";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
+import { PLANS } from "@shared/plans";
 import {
   ArrowRight,
   Brain,
@@ -679,41 +680,42 @@ export default function Home() {
               Simple, transparent pricing
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Start free, upgrade anytime. No hidden fees, no surprise charges.
+              Choose yearly or monthly billing with clear video allowances and no watermark.
             </p>
           </div>
-          <div className="mt-14 grid gap-6 md:grid-cols-4">
-            {[
-              { name: "Starter", price: "$9", period: "/mo", features: ["Up to 5 tours/month", "720p export", "Basic support"] },
-              { name: "Pro", price: "$39", period: "/mo", features: ["Unlimited tours", "1080p export", "Priority support", "Custom branding"], featured: true },
-              { name: "Annual", price: "$29", period: "/yr", features: ["Best value", "All Pro features", "Annual billing", "Early access"] },
-              { name: "Business", price: "$99", period: "/mo", features: ["Team access", "API integration", "Dedicated support", "Custom workflows"] },
-            ].map((plan, i) => (
+          <div className="mx-auto mt-14 grid max-w-4xl gap-6 md:grid-cols-2">
+            {PLANS.map((plan, i) => (
               <div
-                key={plan.name}
+                key={plan.id}
                 className={cn(
                   "reveal-on-scroll relative rounded-2xl p-7 transition-all",
-                  plan.featured
+                  plan.highlighted
                     ? "glass-panel border-primary/50 bg-primary/5 ring-2 ring-primary/20"
                     : "glass-panel soft-card-hover",
                 )}
                 style={{ transitionDelay: `${i * 120}ms` }}
               >
-                {plan.featured && (
+                {plan.badge && (
                   <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
-                    Most popular
+                    {plan.badge}
                   </span>
                 )}
                 <h3 className="font-display text-lg text-foreground">{plan.name}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">{plan.tagline}</p>
                 <div className="mt-3 flex items-baseline gap-1">
-                  <span className="text-3xl font-bold text-foreground">{plan.price}</span>
-                  <span className="text-sm text-muted-foreground">{plan.period}</span>
+                  <span className="text-3xl font-bold text-foreground">${plan.price}</span>
+                  <span className="text-sm text-muted-foreground">
+                    /{plan.interval === "year" ? "year" : "month"}
+                  </span>
                 </div>
                 <ul className="mt-6 space-y-3">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <CheckCircle2 className="h-4 w-4 text-primary" />
-                      {f}
+                  {plan.features.map((feature) => (
+                    <li
+                      key={feature}
+                      className="flex items-start gap-2 text-sm text-muted-foreground"
+                    >
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                      {feature}
                     </li>
                   ))}
                 </ul>

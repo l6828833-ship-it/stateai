@@ -1,6 +1,6 @@
 /** Subscription plans — shared between frontend pricing UI and backend Stripe wiring. */
 
-export type PlanId = "starter" | "pro" | "annual" | "business";
+export type PlanId = "annual" | "pro";
 
 export interface Plan {
   id: PlanId;
@@ -9,87 +9,52 @@ export interface Plan {
   interval: "month" | "year";
   priceLabel: string;
   tagline: string;
-  videosPerMonth: string;
+  videoAllowance: string;
+  includedVideos: number;
   maxResolution: string;
   features: string[];
   highlighted?: boolean;
   badge?: string;
 }
 
+const SHARED_FEATURES = [
+  "Up to 10 images per video",
+  "1080p Full HD",
+  "High-quality cinematic output",
+  "All ratios: 9:16, 1:1, and 16:9",
+  "Best viral effects for every video",
+  "$15 per additional video",
+  "Priority queue",
+  "No watermark",
+] as const;
+
+/** Customer-facing plans. Yearly is intentionally first and highlighted. */
 export const PLANS: Plan[] = [
   {
-    id: "starter",
-    name: "Starter",
-    price: 9,
-    interval: "month",
-    priceLabel: "$9/mo",
-    tagline: "For your first listings",
-    videosPerMonth: "3 videos / month",
-    maxResolution: "480p",
-    features: [
-      "3 tour videos per month",
-      "Up to 6 photos per tour",
-      "480p export",
-      "Walkthrough style",
-      "Email support",
-    ],
-  },
-  {
     id: "annual",
-    name: "Annual",
+    name: "Yearly",
     price: 29,
     interval: "year",
-    priceLabel: "$29/yr",
-    tagline: "Best value — billed yearly",
-    videosPerMonth: "5 videos / month",
-    maxResolution: "720p",
+    priceLabel: "$29/year",
+    tagline: "Best value — one yearly payment",
+    videoAllowance: "36 videos per year",
+    includedVideos: 36,
+    maxResolution: "1080p",
+    highlighted: true,
     badge: "Best Value",
-    features: [
-      "5 tour videos per month",
-      "Up to 10 photos per tour",
-      "720p HD export",
-      "All 3 tour styles",
-      "Priority queue",
-    ],
+    features: ["36 videos per year", ...SHARED_FEATURES],
   },
   {
     id: "pro",
-    name: "Pro",
+    name: "Monthly",
     price: 39,
     interval: "month",
-    priceLabel: "$39/mo",
-    tagline: "For active agents",
-    videosPerMonth: "15 videos / month",
+    priceLabel: "$39/month",
+    tagline: "Flexible monthly billing",
+    videoAllowance: "3 videos per month",
+    includedVideos: 3,
     maxResolution: "1080p",
-    highlighted: true,
-    badge: "Most Popular",
-    features: [
-      "15 tour videos per month",
-      "Up to 15 photos per tour",
-      "1080p Full HD export",
-      "All 3 tour styles",
-      "Custom creative direction",
-      "Priority support",
-    ],
-  },
-  {
-    id: "business",
-    name: "Business",
-    price: 99,
-    interval: "month",
-    priceLabel: "$99/mo",
-    tagline: "For teams & brokerages",
-    videosPerMonth: "Unlimited videos",
-    maxResolution: "1080p",
-    features: [
-      "Unlimited tour videos",
-      "Up to 20 photos per tour",
-      "1080p Full HD export",
-      "All 3 tour styles",
-      "Custom creative direction",
-      "Team seats (up to 5)",
-      "Dedicated support",
-    ],
+    features: ["3 videos per month", ...SHARED_FEATURES],
   },
 ];
 
@@ -105,7 +70,7 @@ export const RESOLUTIONS = ["480p", "720p", "1080p"] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 export const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 
-export const MAX_IMAGES = 20;
+export const MAX_IMAGES = 10;
 export const MAX_IMAGE_SIZE_MB = 10;
 export const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 /** Maximum base64 characters needed to encode MAX_IMAGE_BYTES (without a data-URL prefix). */

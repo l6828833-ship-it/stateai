@@ -18,7 +18,7 @@ export default function PricingModal({
   onOpenChange,
   onSelectPlan,
   title = "Your tour video is ready",
-  subtitle = "Unlock it — and every video after it — with a plan that fits how you sell.",
+  subtitle = "Choose yearly or monthly access to watch and download your cinematic tour.",
 }: PricingModalProps) {
   const [loadingPlan, setLoadingPlan] = useState<PlanId | null>(null);
 
@@ -33,7 +33,7 @@ export default function PricingModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] w-[min(96vw,64rem)] !max-w-none overflow-y-auto rounded-3xl border-ring/40 bg-background/95 p-6 backdrop-blur-xl sm:p-10">
+      <DialogContent className="max-h-[92vh] w-[min(96vw,52rem)] !max-w-none overflow-y-auto rounded-3xl border-ring/40 bg-background/95 p-6 backdrop-blur-xl sm:p-10">
         <div className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" /> Unlock your video
@@ -44,7 +44,7 @@ export default function PricingModal({
           <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{subtitle}</p>
         </div>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mx-auto mt-8 grid max-w-3xl gap-5 sm:grid-cols-2">
           {PLANS.map((plan) => (
             <div
               key={plan.id}
@@ -72,7 +72,7 @@ export default function PricingModal({
               <div className="mt-4 flex items-baseline gap-1">
                 <span className="font-display text-3xl text-foreground">${plan.price}</span>
                 <span className="text-sm text-muted-foreground">
-                  /{plan.interval === "year" ? "yr" : "mo"}
+                  /{plan.interval === "year" ? "year" : "month"}
                 </span>
               </div>
               <ul className="mt-4 flex-1 space-y-2">
@@ -103,7 +103,7 @@ export default function PricingModal({
         </div>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          Secure checkout by Stripe · Cancel anytime from your billing portal
+          Secure checkout by Stripe · Yearly and monthly subscriptions renew automatically · Cancel anytime
         </p>
       </DialogContent>
     </Dialog>

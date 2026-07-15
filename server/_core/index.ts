@@ -9,7 +9,12 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { handleCheckout, handlePortal, handleWebhook } from "../billing";
+import {
+  handleAdditionalVideoCheckout,
+  handleCheckout,
+  handlePortal,
+  handleWebhook,
+} from "../billing";
 import { sdk } from "./sdk";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -51,6 +56,21 @@ async function startServer() {
         return;
       }
       await handleCheckout(req, res, { id: user.id, email: user.email, name: user.name });
+    } catch {
+      res.status(401).json({ error: "Please sign in first" });
+    }
+  });
+  app.post("/api/billing/additional-video", async (req, res) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user) {
+        res.status(401).json({ error: "Please sign in first" });
+        return;
+      }
+      await handleAdditionalVideoCheckout(req, res, {
+        id: user.id,
+        email: user.email,
+      });
     } catch {
       res.status(401).json({ error: "Please sign in first" });
     }

@@ -33,6 +33,28 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 type DashSection = "create" | "videos" | "analytics";
+type PendingAdditionalVideo = { sessionId: string; jobId?: number };
+
+const PENDING_ADDITIONAL_VIDEO_KEY = "estatetour_pending_additional_video";
+
+function loadPendingAdditionalVideo(): PendingAdditionalVideo | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const checkoutSessionId =
+    params.get("additional_video") === "success" ? params.get("session_id") : null;
+  if (checkoutSessionId) return { sessionId: checkoutSessionId };
+
+  try {
+    const raw = localStorage.getItem(PENDING_ADDITIONAL_VIDEO_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingAdditionalVideo>;
+    return typeof parsed.sessionId === "string"
+      ? { sessionId: parsed.sessionId, ...(parsed.jobId ? { jobId: parsed.jobId } : {}) }
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function StatusBadge({ status }: { status: "processing" | "ready" | "failed" }) {
   return (
@@ -58,12 +80,16 @@ export default function Dashboard() {
   const utils = trpc.useUtils();
 
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("idle");
+  const [fakePreviewComplete, setFakePreviewComplete] = useState(false);
   const [pricingOpen, setPricingOpen] = useState(false);
+  const [pendingAdditionalVideo, setPendingAdditionalVideo] =
+    useState<PendingAdditionalVideo | null>(loadPendingAdditionalVideo);
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [draftSyncing, setDraftSyncing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<DashSection>("create");
   const draftSyncedRef = useRef(false);
+  const pricingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stateQuery = trpc.tour.getState.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -100,6 +126,42 @@ export default function Dashboard() {
       navigate("/login");
     }
   }, [authLoading, isAuthenticated, navigate]);
+
+  useEffect(() => {
+    try {
+      if (pendingAdditionalVideo) {
+        localStorage.setItem(
+          PENDING_ADDITIONAL_VIDEO_KEY,
+          JSON.stringify(pendingAdditionalVideo),
+        );
+      } else {
+        localStorage.removeItem(PENDING_ADDITIONAL_VIDEO_KEY);
+      }
+    } catch {
+      // The paid session remains server-verifiable even if storage is blocked.
+    }
+  }, [pendingAdditionalVideo]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const additionalStatus = params.get("additional_video");
+    if (additionalStatus === "success" && pendingAdditionalVideo) {
+      toast.success("Your additional video is ready. Click Generate Tour Video to use it.");
+    } else if (additionalStatus === "cancelled") {
+      toast.info("Additional-video checkout was cancelled");
+    } else {
+      return;
+    }
+    params.delete("additional_video");
+    params.delete("session_id");
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+    );
+  }, [pendingAdditionalVideo]);
 
   // ===== One-time draft sync: restore homepage uploads/settings after signup =====
   useEffect(() => {
@@ -176,6 +238,56 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeJob?.status]);
 
+  useEffect(() => {
+    if (!pendingAdditionalVideo?.jobId || !jobsQuery.data) return;
+    const purchasedJob = jobsQuery.data.find(
+      (job) => job.id === pendingAdditionalVideo.jobId,
+    );
+    if (purchasedJob?.status === "ready") {
+      setPendingAdditionalVideo(null);
+    } else if (purchasedJob?.status === "failed") {
+      // The server permanently keeps this paid Session attached to the failed
+      // job so it cannot be submitted twice. Clear only the browser's pending
+      // selection, allowing normal plan generations to continue.
+      setPendingAdditionalVideo(null);
+      toast.error(
+        "Your paid additional video failed and was not resubmitted. Contact support for a refund or replacement.",
+      );
+    }
+  }, [jobsQuery.data, pendingAdditionalVideo]);
+
+  useEffect(
+    () => () => {
+      if (pricingTimerRef.current) clearTimeout(pricingTimerRef.current);
+    },
+    [],
+  );
+
+  const handleOpenPricing = useCallback(() => {
+    if (pricingTimerRef.current) {
+      clearTimeout(pricingTimerRef.current);
+      pricingTimerRef.current = null;
+    }
+    setPricingOpen(true);
+  }, []);
+
+  const handlePricingOpenChange = useCallback((open: boolean) => {
+    if (!open && pricingTimerRef.current) {
+      clearTimeout(pricingTimerRef.current);
+      pricingTimerRef.current = null;
+    }
+    setPricingOpen(open);
+  }, []);
+
+  const handleFakeComplete = useCallback(() => {
+    setFakePreviewComplete(true);
+    if (pricingTimerRef.current) clearTimeout(pricingTimerRef.current);
+    pricingTimerRef.current = setTimeout(() => {
+      setPricingOpen(true);
+      pricingTimerRef.current = null;
+    }, 900);
+  }, []);
+
   // ===== Handlers =====
   const handleFilesAdded = async (files: File[]) => {
     if (!project) return;
@@ -245,9 +357,24 @@ export default function Dashboard() {
     }
 
     if (!state?.subscribed) {
-      // NON-SUBSCRIBER: staged performance, then blurred preview + pricing.
+      // Keep the completed locked preview stable. Repeated clicks reopen pricing
+      // instead of replaying the animation or exposing a stale real video.
+      if (theaterMode === "fake" && fakePreviewComplete) {
+        handleOpenPricing();
+        return;
+      }
+      if (theaterMode === "fake") return;
+
+      if (pricingTimerRef.current) {
+        clearTimeout(pricingTimerRef.current);
+        pricingTimerRef.current = null;
+      }
+      setFakePreviewComplete(false);
+      setActiveJobId(null);
       setTheaterMode("fake");
-      document.getElementById("output-theater")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document
+        .getElementById("output-theater")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
 
@@ -255,7 +382,26 @@ export default function Dashboard() {
     try {
       setTheaterMode("real");
       document.getElementById("output-theater")?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const job = await generateMutation.mutateAsync({ projectId: project.id });
+      const job = await generateMutation.mutateAsync({
+        projectId: project.id,
+        ...(pendingAdditionalVideo
+          ? { additionalCheckoutSessionId: pendingAdditionalVideo.sessionId }
+          : {}),
+      });
+      if (pendingAdditionalVideo) {
+        if (job.status === "failed") {
+          setPendingAdditionalVideo(null);
+          toast.error(
+            job.errorMessage ||
+              "Your paid additional video failed. Contact support for a refund or replacement.",
+          );
+        } else {
+          setPendingAdditionalVideo({
+            sessionId: pendingAdditionalVideo.sessionId,
+            jobId: job.id,
+          });
+        }
+      }
       setActiveJobId(job.id);
       jobsQuery.refetch();
     } catch (e) {
@@ -264,7 +410,7 @@ export default function Dashboard() {
       jobsQuery.refetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id]);
+  }, [fakePreviewComplete, pendingAdditionalVideo, project?.id, theaterMode]);
 
   const handleGenerateRef = useRef<typeof handleGenerate | null>(null);
   useEffect(() => {
@@ -283,6 +429,24 @@ export default function Dashboard() {
       }
     } catch {
       toast.error("Could not start checkout — please try again");
+    }
+  };
+
+  const handleBuyAdditionalVideo = async () => {
+    if (pendingAdditionalVideo) {
+      toast.info("Use your pending additional video before buying another one");
+      return;
+    }
+    try {
+      const response = await fetch("/api/billing/additional-video", { method: "POST" });
+      const data = (await response.json()) as { url?: string; error?: string };
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        toast.error(data.error || "Could not start additional-video checkout");
+      }
+    } catch {
+      toast.error("Could not start additional-video checkout");
     }
   };
 
@@ -408,7 +572,9 @@ export default function Dashboard() {
                     size="sm"
                     variant="outline"
                     className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
-                    onClick={() => (subscribed ? handleDownload(job.id) : setPricingOpen(true))}
+                    onClick={() =>
+                      subscribed ? handleDownload(job.id) : handleOpenPricing()
+                    }
                   >
                     <Download className="mr-1 h-3 w-3" /> Get
                   </Button>
@@ -427,16 +593,30 @@ export default function Dashboard() {
                     <RefreshCw className="mr-1 h-3 w-3" /> View
                   </Button>
                 )}
-                {job.status === "failed" && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                    onClick={handleGenerate}
-                  >
-                    <RefreshCw className="mr-1 h-3 w-3" /> Retry
-                  </Button>
-                )}
+                {job.status === "failed" &&
+                  (job.additionalVideo ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                      onClick={() =>
+                        toast.error(
+                          "This paid additional video was not resubmitted. Contact support for a refund or replacement.",
+                        )
+                      }
+                    >
+                      <CreditCard className="mr-1 h-3 w-3" /> Support
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                      onClick={handleGenerate}
+                    >
+                      <RefreshCw className="mr-1 h-3 w-3" /> Retry
+                    </Button>
+                  ))}
               </div>
             </li>
           ))}
@@ -455,7 +635,8 @@ export default function Dashboard() {
         subscribed={subscribed}
         activeSection={activeSection}
         onNavigate={goToSection}
-        onUpgradeClick={() => setPricingOpen(true)}
+        onUpgradeClick={handleOpenPricing}
+        onBuyAdditionalVideo={handleBuyAdditionalVideo}
         onBillingClick={handleOpenBillingPortal}
       />
 
@@ -485,7 +666,7 @@ export default function Dashboard() {
               size="sm"
               variant="ghost"
               className="btn-springy rounded-full px-2 text-primary"
-              onClick={() => setPricingOpen(true)}
+              onClick={handleOpenPricing}
             >
               <Crown className="h-4 w-4" />
             </Button>
@@ -523,7 +704,7 @@ export default function Dashboard() {
                 <Button
                   size="sm"
                   className="btn-springy rounded-full"
-                  onClick={() => setPricingOpen(true)}
+                  onClick={handleOpenPricing}
                 >
                   <Crown className="mr-1.5 h-3.5 w-3.5" /> Upgrade
                 </Button>
@@ -586,12 +767,16 @@ export default function Dashboard() {
                               | "failed")
                           : null
                       }
-                      videoUrl={activeJob?.videoUrl ?? null}
+                      videoUrl={
+                        theaterMode === "real" && subscribed
+                          ? (activeJob?.videoUrl ?? null)
+                          : null
+                      }
                       errorMessage={activeJob?.errorMessage ?? null}
-                      onFakeComplete={() => {
-                        setTimeout(() => setPricingOpen(true), 900);
-                      }}
-                      onUnlockClick={() => setPricingOpen(true)}
+                      onFakeComplete={handleFakeComplete}
+                      fakeComplete={fakePreviewComplete}
+                      canPlayVideo={subscribed}
+                      onUnlockClick={handleOpenPricing}
                       onDownload={() => activeJobId && handleDownload(activeJobId)}
                     />
                   )}
@@ -652,14 +837,22 @@ export default function Dashboard() {
                 </h3>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {subscribed
-                    ? "You're on a paid plan with unlimited cinematic generations."
-                    : "You're on the free plan. Upgrade to unlock unlimited tours and 1080p exports."}
+                    ? "Your paid plan includes cinematic 1080p generations without watermarks."
+                    : "You're on the free plan. Upgrade for 1080p cinematic tours without watermarks."}
                 </p>
-                {!subscribed && (
+                {subscribed ? (
                   <Button
                     size="sm"
                     className="btn-springy mt-4 rounded-full"
-                    onClick={() => setPricingOpen(true)}
+                    onClick={handleBuyAdditionalVideo}
+                  >
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Buy additional video · $15
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="btn-springy mt-4 rounded-full"
+                    onClick={handleOpenPricing}
                   >
                     <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
                   </Button>
@@ -689,7 +882,11 @@ export default function Dashboard() {
       />
 
       {/* ===== Pricing popup ===== */}
-      <PricingModal open={pricingOpen} onOpenChange={setPricingOpen} onSelectPlan={handleSelectPlan} />
+      <PricingModal
+        open={pricingOpen}
+        onOpenChange={handlePricingOpenChange}
+        onSelectPlan={handleSelectPlan}
+      />
     </div>
   );
 }

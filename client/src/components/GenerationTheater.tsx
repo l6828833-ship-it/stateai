@@ -44,6 +44,10 @@ interface GenerationTheaterProps {
   errorMessage?: string | null;
   /** Called when fake flow finishes its performance (blurred preview shown) */
   onFakeComplete?: () => void;
+  /** Parent-owned completion state so remounting cannot replay a finished preview. */
+  fakeComplete?: boolean;
+  /** Whether a real ready video may be rendered in the browser. */
+  canPlayVideo?: boolean;
   /** Open the pricing modal (locked preview clicked) */
   onUnlockClick?: () => void;
   onDownload?: () => void;
@@ -58,6 +62,8 @@ export default function GenerationTheater({
   videoUrl,
   errorMessage,
   onFakeComplete,
+  fakeComplete = false,
+  canPlayVideo = false,
   onUnlockClick,
   onDownload,
   fakeDurationMs = 14000,
@@ -65,8 +71,14 @@ export default function GenerationTheater({
   const [progress, setProgress] = useState(0);
   const [fakeDone, setFakeDone] = useState(false);
   const completedRef = useRef(false);
+  const onFakeCompleteRef = useRef(onFakeComplete);
 
-  // Drive the fake (and cosmetic real) progress.
+  useEffect(() => {
+    onFakeCompleteRef.current = onFakeComplete;
+  }, [onFakeComplete]);
+
+  // Drive each fake run exactly once. Callback identity changes must never
+  // reset a completed preview or restart the animation behind the pricing modal.
   useEffect(() => {
     if (mode === "idle") {
       setProgress(0);
@@ -74,6 +86,19 @@ export default function GenerationTheater({
       completedRef.current = false;
       return;
     }
+
+    if (mode === "fake" && fakeComplete) {
+      setProgress(100);
+      setFakeDone(true);
+      completedRef.current = true;
+      return;
+    }
+
+    if (mode === "real" && jobStatus !== "processing") {
+      setProgress(jobStatus === "ready" ? 100 : 0);
+      return;
+    }
+
     setProgress(0);
     setFakeDone(false);
     completedRef.current = false;
@@ -92,7 +117,7 @@ export default function GenerationTheater({
           completedRef.current = true;
           setFakeDone(true);
           clearInterval(tick);
-          onFakeComplete?.();
+          onFakeCompleteRef.current?.();
         }
       } else {
         // Real: asymptotic progress that never hits 100 until the job is ready.
@@ -100,7 +125,7 @@ export default function GenerationTheater({
       }
     }, 120);
     return () => clearInterval(tick);
-  }, [mode, fakeDurationMs, onFakeComplete]);
+  }, [mode, fakeComplete, fakeDurationMs, jobStatus]);
 
   const stageIndex = useMemo(() => {
     if (progress < 22) return 0;
@@ -111,10 +136,17 @@ export default function GenerationTheater({
 
   if (mode === "idle") return null;
 
-  const isRealReady = mode === "real" && jobStatus === "ready" && videoUrl;
+  const isRealReady = Boolean(
+    mode === "real" && jobStatus === "ready" && canPlayVideo && videoUrl,
+  );
   const isRealFailed = mode === "real" && jobStatus === "failed";
-  const showRendering = (mode === "fake" && !fakeDone) || (mode === "real" && jobStatus === "processing");
-  const showLockedPreview = mode === "fake" && fakeDone;
+  const fakeFinished = mode === "fake" && (fakeDone || fakeComplete);
+  const showRendering =
+    (mode === "fake" && !fakeFinished) ||
+    (mode === "real" && jobStatus === "processing");
+  const showLockedPreview =
+    fakeFinished ||
+    (mode === "real" && jobStatus === "ready" && !canPlayVideo);
 
   return (
     <div className="animate-fade-up overflow-hidden rounded-3xl border border-ring/40 bg-card/80">
@@ -268,7 +300,7 @@ export default function GenerationTheater({
           </span>
           <p className="font-medium text-foreground">Generation failed</p>
           <p className="max-w-sm text-sm text-muted-foreground">
-            {errorMessage || "Something went wrong while rendering. You have not been charged for this attempt — please try again."}
+            {errorMessage || "Something went wrong while rendering. Please contact support before trying again."}
           </p>
         </div>
       )}

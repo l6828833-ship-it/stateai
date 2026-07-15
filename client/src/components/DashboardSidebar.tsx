@@ -26,6 +26,7 @@ interface DashboardSidebarProps {
   activeSection?: string;
   onNavigate?: (section: string) => void;
   onUpgradeClick?: () => void;
+  onBuyAdditionalVideo?: () => void;
   onBillingClick?: () => void;
 }
 
@@ -37,6 +38,7 @@ export default function DashboardSidebar({
   activeSection = "create",
   onNavigate,
   onUpgradeClick,
+  onBuyAdditionalVideo,
   onBillingClick,
 }: DashboardSidebarProps) {
   const { user, logout } = useAuth();
@@ -190,17 +192,28 @@ export default function DashboardSidebar({
               <p className="text-sm font-semibold text-foreground">{planLabel}</p>
             </div>
             <p className="mb-3 text-xs text-muted-foreground">
-              {subscribed ? "Unlimited cinematic generations." : "Upgrade for unlimited tours & 1080p exports."}
+              {subscribed
+                ? "Cinematic 1080p generations without watermarks."
+                : "Upgrade for cinematic 1080p tours without watermarks."}
             </p>
             {subscribed ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="btn-springy w-full rounded-full bg-card/70"
-                onClick={onBillingClick}
-              >
-                <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
-              </Button>
+              <div className="space-y-2">
+                <Button
+                  size="sm"
+                  className="btn-springy w-full rounded-full"
+                  onClick={onBuyAdditionalVideo}
+                >
+                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $15
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="btn-springy w-full rounded-full bg-card/70"
+                  onClick={onBillingClick}
+                >
+                  <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
+                </Button>
+              </div>
             ) : (
               <Button
                 size="sm"

@@ -4,7 +4,7 @@
 ✅ Enhanced Home.tsx with:
 - Use Cases section (Luxury Estates, Quick Turnarounds, Multi-Unit Complexes)
 - Testimonials section (3 real-looking testimonials with 5-star ratings)
-- Pricing Preview section (4 plans with features: Starter $9/mo, Pro $39/mo featured, Annual $29/yr, Business $99/mo)
+- Pricing Preview section with Yearly $29/year (36 videos) and Monthly $39/month (3 videos), both using the shared 1080p cinematic feature set
 - CTA Banner section before footer
 - Improved footer navigation (added Pricing & How it works links)
 
