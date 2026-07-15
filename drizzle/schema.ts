@@ -96,7 +96,7 @@ export type InsertProject = typeof projects.$inferInsert;
 /**
  * Uploaded property photos. Strict ordering is enforced via sequenceIndex —
  * this index is the single source of truth for photo order and is stored
- * alongside the S3 key so the generation pipeline can never mix up order.
+ * alongside the Supabase Storage key so generation uses the intended order.
  */
 export const projectImages = pgTable("project_images", {
   id: serial("id").primaryKey(),
@@ -104,7 +104,7 @@ export const projectImages = pgTable("project_images", {
   userId: integer("userId").notNull(),
   /** 0-based strict ordering index within the project */
   sequenceIndex: integer("sequenceIndex").notNull(),
-  /** S3 storage key (the only way to reach the object) */
+  /** Supabase Storage object key (the only way to reach the object) */
   fileKey: varchar("fileKey", { length: 512 }).notNull(),
   /** Serving URL (/manus-storage/{key}) */
   url: varchar("url", { length: 768 }).notNull(),
@@ -134,7 +134,7 @@ export const generationJobs = pgTable("generation_jobs", {
   clipDuration: integer("clipDuration").notNull(),
   /** Snapshot of ordered image ids at generation time (JSON array) — order guarantee */
   imageSequence: text("imageSequence"),
-  /** Hidden: LLM-optimized prompt sent to Seedance. NEVER exposed to client. */
+  /** Hidden: Inworld-optimized prompt sent to Kling. NEVER exposed to client. */
   optimizedPrompt: text("optimizedPrompt"),
   /** OpenRouter async video job id */
   openrouterJobId: varchar("openrouterJobId", { length: 128 }),

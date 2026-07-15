@@ -3,13 +3,13 @@
 ## Backend & Data
 - [x] Drizzle schema: projects, projectImages (with sequenceIndex), generationJobs, subscriptions tables
 - [x] DB migration generated and applied
-- [x] S3 upload pipeline: presigned/direct upload with strict sequenceIndex metadata per image
+- [x] Supabase Storage upload pipeline with strict sequenceIndex metadata per image
 - [x] tRPC procedures: project create/get/update, image upload/reorder/delete, settings persistence
 - [x] OpenRouter integration module (server-side only, hidden from user)
-- [x] LLM prompt optimizer: send all images in one multimodal call, get structured JSON per photo (room_type, camera_move, seedance_prompt) — fully invisible to user
-- [x] Video generation via OpenRouter bytedance/seedance-2.0, only for active subscribers
+- [x] Inworld/Claude prompt optimizer: send all ordered images in one multimodal call and return a structured plan plus Kling prompt
+- [x] Kling 3.0 Pro video generation via OpenRouter, 1080p with audio disabled, only for active subscribers
 - [x] Generation job tracking with status polling (statuses exactly: processing, ready, failed)
-- [x] OPENROUTER_API_KEY secret requested via secrets flow
+- [x] `INWORLD_API_KEY` and `OPENROUTER_API_KEY` documented as required server secrets
 
 ## Homepage (public)
 - [x] Cinematic soft-pink design system (palette #FFF6F9 / #F7B8D0 / #E894B5 / #3A2E33) in index.css + Google fonts

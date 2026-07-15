@@ -4,7 +4,7 @@
  * Responsible for the hidden IMAGE ANALYSIS / prompt-optimization step: all
  * project photos (in strict sequence order) are sent to a vision LLM through
  * Inworld's OpenAI-compatible Router in a single multimodal call, returning a
- * structured plan + one optimized prompt that is then handed to Seedance
+ * structured plan + one optimized prompt that is then handed to Kling 3.0 Pro
  * (via OpenRouter) for the actual video generation.
  *
  * The result is stored server-side only and never exposed to clients.
@@ -16,14 +16,21 @@
  * Auth: Inworld uses HTTP Basic with the Base64 key copied from the portal:
  *   Authorization: Basic <INWORLD_API_KEY>
  */
+import { ENV } from "./_core/env";
 import type { OrderedImage } from "./openrouter";
 
 const INWORLD_BASE = "https://api.inworld.ai/v1";
 
 function getApiKey(): string {
-  const key = process.env.INWORLD_API_KEY ?? "";
+  const key = ENV.inworldApiKey.trim();
   if (!key) throw new Error("INWORLD_API_KEY is not configured");
   return key;
+}
+
+/** Fail fast before a paid generation job if required analysis is not configured. */
+export function assertInworldConfigured(): void {
+  getApiKey();
+  getVisionModel();
 }
 
 /**
@@ -31,7 +38,9 @@ function getApiKey(): string {
  * Default: anthropic/claude-sonnet-4-6 (Inworld model ids use dashes).
  */
 function getVisionModel(): string {
-  return process.env.INWORLD_VISION_MODEL || "anthropic/claude-sonnet-4-6";
+  const model = ENV.inworldVisionModel.trim();
+  if (!model) throw new Error("INWORLD_VISION_MODEL cannot be empty");
+  return model;
 }
 
 /** Kling supports up to 15s clips; the AI picks the ideal length in this range. */
@@ -49,7 +58,7 @@ export interface AnalysisResult {
     target: string;
     shot_prompt: string;
   }>;
-  /** The single combined, optimized prompt for Seedance. */
+  /** The single combined, optimized prompt for Kling. */
   optimizedPrompt: string;
   /** AI-decided ideal clip length in seconds, clamped to [MIN,MAX]. */
   duration: number;
@@ -68,7 +77,7 @@ export function defaultDurationFor(imageCount: number): number {
 
 /**
  * HIDDEN STEP — analyze all photos together (relational ordering matters) and
- * produce one optimized Seedance prompt. The AI acts as the director and picks
+ * produce one optimized Kling prompt. The AI acts as the director and picks
  * the best cinematic style + camera move for EACH scene. Never expose to clients.
  */
 export async function analyzeAndOptimizePrompt(params: {

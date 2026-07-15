@@ -102,7 +102,7 @@ export const TOUR_STYLES = ["Walkthrough", "Drone", "Cinematic"] as const;
 export type TourStyleId = (typeof TOUR_STYLES)[number];
 
 export const RESOLUTIONS = ["480p", "720p", "1080p"] as const;
-export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"] as const;
+export const ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 export const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 
 export const MAX_IMAGES = 20;

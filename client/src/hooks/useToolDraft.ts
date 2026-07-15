@@ -1,3 +1,4 @@
+import { ASPECT_RATIOS } from "@shared/plans";
 import { useCallback, useEffect, useState } from "react";
 
 /**
@@ -109,7 +110,17 @@ export function loadDraft(): ToolDraft {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...EMPTY_DRAFT };
     const parsed = JSON.parse(raw) as Partial<ToolDraft>;
-    return { ...EMPTY_DRAFT, ...parsed, images: parsed.images ?? [] };
+    const aspectRatio = ASPECT_RATIOS.some(
+      (supported) => supported === parsed.aspectRatio,
+    )
+      ? parsed.aspectRatio!
+      : EMPTY_DRAFT.aspectRatio;
+    return {
+      ...EMPTY_DRAFT,
+      ...parsed,
+      aspectRatio,
+      images: parsed.images ?? [],
+    };
   } catch {
     return { ...EMPTY_DRAFT };
   }

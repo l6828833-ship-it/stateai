@@ -9,14 +9,17 @@ import {
 import * as db from "../db";
 import {
   analyzeAndOptimizePrompt,
+  assertInworldConfigured,
   buildFallbackPrompt,
   defaultDurationFor,
 } from "../inworld";
 import {
-  downloadSeedanceVideo,
+  assertOpenRouterConfigured,
+  downloadKlingVideo,
+  isVideoAspectRatio,
   OUTPUT_RESOLUTION,
-  pollSeedanceJob,
-  submitSeedanceVideo,
+  pollKlingJob,
+  submitKlingVideo,
   type OrderedImage,
 } from "../openrouter";
 import { storageGetSignedUrl, storagePut } from "../storage";
@@ -166,8 +169,14 @@ function hasValidImageStructure(buffer: Buffer, mimeType: string): boolean {
 type GenerationJob = NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>;
 
 export function toClientJob(job: GenerationJob) {
-  const { optimizedPrompt, openrouterJobId, videoKey, ...safe } = job;
-  return safe;
+  const { optimizedPrompt, openrouterJobId, videoKey, errorMessage, ...safe } = job;
+  return {
+    ...safe,
+    errorMessage:
+      job.status === "failed"
+        ? "Video generation failed. Please try again or contact support."
+        : null,
+  };
 }
 
 /** Convert stable storage paths into short-lived URLs for native media elements. */
@@ -220,7 +229,15 @@ async function toPublicOrderedImages(
 export const tourRouter = router({
   /** Full tool state: active project + strictly ordered images + subscription flag. */
   getState: protectedProcedure.query(async ({ ctx }) => {
-    const project = await db.getOrCreateActiveProject(ctx.user.id);
+    const storedProject = await db.getOrCreateActiveProject(ctx.user.id);
+    const project = isVideoAspectRatio(storedProject.aspectRatio)
+      ? storedProject
+      : { ...storedProject, aspectRatio: "16:9" };
+    if (project !== storedProject) {
+      await db.updateProjectSettings(project.id, ctx.user.id, {
+        aspectRatio: "16:9",
+      });
+    }
     const images = await db.getProjectImages(project.id, ctx.user.id);
     const clientImages = await Promise.all(
       images.map(async (image) => ({
@@ -243,7 +260,7 @@ export const tourRouter = router({
       z.object({
         projectId: z.number(),
         name: z.string().max(255).optional(),
-        aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "21:9"]).optional(),
+        aspectRatio: z.enum(["16:9", "9:16", "1:1"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -363,7 +380,7 @@ export const tourRouter = router({
    *   1. verify active subscription (server-side, non-negotiable)
    *   2. load images strictly ordered by sequenceIndex, validate gapless
    *   3. hidden LLM analysis/prompt optimization (never returned to client)
-   *   4. submit Seedance job, persist job row with status "processing"
+   *   4. submit a Kling 3.0 Pro job, persist job row with status "processing"
    */
   generate: protectedProcedure
     .input(z.object({ projectId: z.number() }))
@@ -378,6 +395,24 @@ export const tourRouter = router({
 
       const project = await db.getProjectById(input.projectId, ctx.user.id);
       if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+
+      const aspectRatio = isVideoAspectRatio(project.aspectRatio)
+        ? project.aspectRatio
+        : "16:9";
+      if (aspectRatio !== project.aspectRatio) {
+        await db.updateProjectSettings(project.id, ctx.user.id, { aspectRatio });
+      }
+
+      try {
+        assertInworldConfigured();
+        assertOpenRouterConfigured();
+      } catch (error) {
+        console.error("[Generation] Provider configuration error", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Video generation is not configured. Please contact support.",
+        });
+      }
 
       const images = await db.getProjectImages(project.id, ctx.user.id);
       if (images.length < 1) {
@@ -402,7 +437,7 @@ export const tourRouter = router({
         status: "processing",
         tourStyle: project.tourStyle,
         resolution: OUTPUT_RESOLUTION,
-        aspectRatio: project.aspectRatio,
+        aspectRatio,
         clipDuration: defaultDurationFor(sorted.length),
         imageSequence: JSON.stringify(sorted.map((i) => i.id)),
         thumbnailUrl: sorted[0]?.url ?? null,
@@ -426,11 +461,11 @@ export const tourRouter = router({
           duration = defaultDurationFor(sorted.length);
         }
 
-        const submission = await submitSeedanceVideo({
+        const submission = await submitKlingVideo({
           prompt: optimizedPrompt,
           images: orderedPublic,
           duration,
-          aspectRatio: project.aspectRatio,
+          aspectRatio,
         });
 
         await db.updateGenerationJob(job.id, {
@@ -441,8 +476,10 @@ export const tourRouter = router({
 
         const fresh = await db.getGenerationJob(job.id, ctx.user.id);
         return toClientJobWithMedia(fresh!, false);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : "Video generation failed";
+      } catch (error) {
+        console.error("[Generation] Submission failed", error);
+        const message =
+          "Video generation could not be started. Please try again or contact support.";
         await db.updateGenerationJob(job.id, { status: "failed", errorMessage: message });
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
       }
@@ -450,7 +487,7 @@ export const tourRouter = router({
 
   /**
    * Poll a job. If still processing on OpenRouter's side, checks progress;
-   * when completed, downloads the video into our S3 and marks it "ready".
+   * when completed, downloads the video into Supabase Storage and marks it "ready".
    */
   pollJob: protectedProcedure
     .input(z.object({ jobId: z.number() }))
@@ -462,9 +499,9 @@ export const tourRouter = router({
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      let poll: Awaited<ReturnType<typeof pollSeedanceJob>>;
+      let poll: Awaited<ReturnType<typeof pollKlingJob>>;
       try {
-        poll = await pollSeedanceJob(job.openrouterJobId);
+        poll = await pollKlingJob(job.openrouterJobId);
       } catch (error) {
         // Upstream polling failures are usually transient; keep processing.
         console.warn("[Generation] Poll error for job", job.id, error);
@@ -473,7 +510,7 @@ export const tourRouter = router({
 
       if (poll.status === "completed") {
         try {
-          const videoBuffer = await downloadSeedanceVideo(job.openrouterJobId, poll.videoUrl);
+          const videoBuffer = await downloadKlingVideo(job.openrouterJobId, poll.videoUrl);
           const { key, url } = await storagePut(
             `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
             videoBuffer,
@@ -495,9 +532,14 @@ export const tourRouter = router({
           });
         }
       } else if (["failed", "cancelled", "expired"].includes(poll.status)) {
+        console.error("[Generation] OpenRouter job ended", {
+          jobId: job.id,
+          status: poll.status,
+          providerError: poll.error,
+        });
         await db.updateGenerationJob(job.id, {
           status: "failed",
-          errorMessage: poll.error ?? `Generation ${poll.status}`,
+          errorMessage: `Video generation ${poll.status}. Please try again or contact support.`,
         });
       }
 
