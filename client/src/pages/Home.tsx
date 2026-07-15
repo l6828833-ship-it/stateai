@@ -3,7 +3,8 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
-import { useToolDraft, fileToDataUrl, type DraftImage } from "@/hooks/useToolDraft";
+import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
+import { prepareImageForUpload } from "@/lib/imageUpload";
 import {
   ArrowRight,
   Brain,
@@ -144,7 +145,7 @@ function HeroPreview() {
 export default function Home() {
   const { isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
-  const { draft, update } = useToolDraft();
+  const { draft, update, setDraft } = useToolDraft();
   const heroRef = useRef<HTMLDivElement>(null);
   const [parallax, setParallax] = useState({ x: 0, y: 0 });
   const [scrolled, setScrolled] = useState(false);
@@ -200,49 +201,63 @@ export default function Home() {
     const newImages: DraftImage[] = [];
     for (const file of files) {
       try {
-        const dataUrl = await fileToDataUrl(file);
-        // Derive the real mime from the produced data URL so the format is
-        // preserved faithfully on upload (jpeg/png/webp), never mislabeled.
-        const mimeType = dataUrl.slice(5, dataUrl.indexOf(";")) || file.type || "image/jpeg";
+        const prepared = await prepareImageForUpload(file);
         newImages.push({
           cid: `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           fileName: file.name,
-          mimeType,
-          dataUrl,
+          mimeType: prepared.mimeType,
+          dataUrl: prepared.dataUrl,
         });
-      } catch {
-        toast.error(`Could not read ${file.name}`);
+        if (prepared.optimized) {
+          toast.info(`${file.name} was optimized for a reliable high-quality upload`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The image could not be read";
+        toast.error(`${file.name}: ${message}`);
       }
     }
     if (newImages.length > 0) {
-      update({ images: [...draft.images, ...newImages] });
+      setDraft((current) => ({ ...current, images: [...current.images, ...newImages] }));
       toast.success(`${newImages.length} photo${newImages.length > 1 ? "s" : ""} added to your tour`);
     }
   };
 
   const handleReorder = (orderedIds: Array<string | number>) => {
-    const byId = new Map(draft.images.map((i) => [i.cid, i]));
-    const reordered = orderedIds
-      .map((id) => byId.get(String(id)))
-      .filter((i): i is DraftImage => Boolean(i));
-    update({ images: reordered });
+    setDraft((current) => {
+      const byId = new Map(current.images.map((image) => [image.cid, image]));
+      const reordered = orderedIds
+        .map((id) => byId.get(String(id)))
+        .filter((image): image is DraftImage => Boolean(image));
+      return { ...current, images: reordered };
+    });
   };
 
   const handleDelete = (id: string | number) => {
-    update({ images: draft.images.filter((i) => i.cid !== String(id)) });
+    setDraft((current) => ({
+      ...current,
+      images: current.images.filter((image) => image.cid !== String(id)),
+    }));
   };
 
   const handleSettingsChange = (patch: Partial<ToolSettings>) => {
     update(patch);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (draft.images.length === 0) {
       toast.error("Add at least one photo first");
       return;
     }
-    // Sign-up gate: everything stays in the local draft, restored after login.
+    // Persist the exact draft before navigating through sign-up.
+    const pendingDraft = { ...draft, pendingGenerate: true };
     update({ pendingGenerate: true });
+    try {
+      await saveDraft(pendingDraft);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Browser storage is unavailable";
+      toast.error(`Your photos could not be saved before sign-up: ${message}`);
+      return;
+    }
     if (isAuthenticated) {
       navigate("/dashboard");
     } else {

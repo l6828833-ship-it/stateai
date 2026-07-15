@@ -94,7 +94,7 @@ export const PLANS: Plan[] = [
 ];
 
 export const PLAN_BY_ID: Record<PlanId, Plan> = Object.fromEntries(
-  PLANS.map((p) => [p.id, p]),
+  PLANS.map(p => [p.id, p])
 ) as Record<PlanId, Plan>;
 
 /** Tour styles — labels must be exactly these three. */
@@ -107,3 +107,6 @@ export const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 
 export const MAX_IMAGES = 20;
 export const MAX_IMAGE_SIZE_MB = 10;
+export const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+/** Maximum base64 characters needed to encode MAX_IMAGE_BYTES (without a data-URL prefix). */
+export const MAX_IMAGE_BASE64_LENGTH = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);

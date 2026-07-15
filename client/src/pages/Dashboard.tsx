@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import { dataUrlToBase64, prepareImageForUpload } from "@/lib/imageUpload";
 import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
 import GenerationTheater, { type TheaterMode } from "@/components/GenerationTheater";
 import PricingModal from "@/components/PricingModal";
@@ -9,7 +10,7 @@ import DashboardSidebar from "@/components/DashboardSidebar";
 import DashboardBottomNav from "@/components/DashboardBottomNav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { loadDraft, clearDraft } from "@/hooks/useToolDraft";
+import { clearDraft, loadDraftWithImages, saveDraft } from "@/hooks/useToolDraft";
 import type { PlanId } from "@shared/plans";
 import {
   BadgeCheck,
@@ -103,17 +104,15 @@ export default function Dashboard() {
   // ===== One-time draft sync: restore homepage uploads/settings after signup =====
   useEffect(() => {
     if (!isAuthenticated || !project || draftSyncedRef.current || draftSyncing) return;
-    const draft = loadDraft();
-    const hasDraft = draft.images.length > 0 || draft.creativeText || draft.pendingGenerate;
-    if (!hasDraft) {
-      draftSyncedRef.current = true;
-      return;
-    }
 
     draftSyncedRef.current = true;
     setDraftSyncing(true);
     (async () => {
       try {
+        const draft = await loadDraftWithImages();
+        const hasDraft = draft.images.length > 0 || draft.pendingGenerate;
+        if (!hasDraft) return;
+
         // Push settings first.
         await settingsMutation.mutateAsync({
           projectId: project.id,
@@ -121,10 +120,7 @@ export default function Dashboard() {
         });
         // Upload images strictly one-by-one, in draft order, so the
         // server-assigned sequence indexes match the user's arrangement.
-        // Preserve each photo's original format/quality on upload.
-        for (const img of draft.images) {
-          const base64 = img.dataUrl.split(",")[1] ?? "";
-          if (!base64) continue;
+        for (const [index, img] of draft.images.entries()) {
           const mimeType = /^image\/(jpeg|png|webp)$/.test(img.mimeType)
             ? img.mimeType
             : "image/jpeg";
@@ -132,12 +128,14 @@ export default function Dashboard() {
             projectId: project.id,
             fileName: img.fileName,
             mimeType,
-            base64Data: base64,
+            base64Data: dataUrlToBase64(img.dataUrl),
             roomTag: img.roomTag,
           });
+          // Checkpoint each success so a retry cannot duplicate uploaded photos.
+          await saveDraft({ ...draft, images: draft.images.slice(index + 1) });
         }
         const shouldAutoGenerate = draft.pendingGenerate;
-        clearDraft();
+        await clearDraft();
         await utils.tour.getState.invalidate();
         if (draft.images.length > 0) {
           toast.success("Your photos and settings were restored from the homepage");
@@ -146,9 +144,10 @@ export default function Dashboard() {
           // Continue the flow the user started before signing up.
           setTimeout(() => handleGenerateRef.current?.(), 800);
         }
-      } catch (e) {
-        toast.error("Some photos could not be restored — please re-upload them");
-        clearDraft();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown upload error";
+        toast.error(`Your saved photos could not be restored: ${message}`);
+        // Keep storage intact so transient browser/network failures are retryable.
         await utils.tour.getState.invalidate();
       } finally {
         setDraftSyncing(false);
@@ -182,25 +181,19 @@ export default function Dashboard() {
     if (!project) return;
     for (const file of files) {
       try {
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode.apply(
-            null,
-            Array.from(bytes.subarray(i, i + chunk)),
-          );
-        }
-        const base64 = btoa(binary);
+        const prepared = await prepareImageForUpload(file);
         await uploadMutation.mutateAsync({
           projectId: project.id,
           fileName: file.name,
-          mimeType: (file.type || "image/jpeg") as string,
-          base64Data: base64,
+          mimeType: prepared.mimeType,
+          base64Data: dataUrlToBase64(prepared.dataUrl),
         });
-      } catch (e) {
-        toast.error(`Failed to upload ${file.name}`);
+        if (prepared.optimized) {
+          toast.info(`${file.name} was optimized for a reliable high-quality upload`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown upload error";
+        toast.error(`Failed to upload ${file.name}: ${message}`);
       }
     }
     utils.tour.getState.invalidate();
