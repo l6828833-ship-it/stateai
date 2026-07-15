@@ -124,9 +124,8 @@ export function klingExternalTaskIdForJob(jobId: number): string {
 }
 
 /**
- * Store official Kling IDs in the existing provider-task column with an
- * explicit prefix. Unprefixed values remain recognizable as legacy
- * OpenRouter jobs, avoiding a destructive database migration.
+ * Store official Kling task ids with an explicit `kling:` prefix so the stored
+ * value is unambiguous and self-describing.
  */
 export function encodeKlingProviderTaskId(taskId: string): string {
   const value = taskId.trim();

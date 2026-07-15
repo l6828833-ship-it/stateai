@@ -25,15 +25,15 @@
 - Official Kling submission: POST `/image-to-video/kling-3.0` with Bearer authentication. The request uses the documented `contents`, `settings`, and `options` structure: prompt plus required `first_frame` and optional `last_frame`; 1080p; 3–15-second duration; audio off; multi-shot off; and watermark disabled. Kling's documented Image-to-Video request does not expose an aspect-ratio field, so the chosen composition is included in the prompt and the first frame determines the source canvas.
 - Each task uses the globally unique `external_task_id` `estatetour-generation-{databaseJobId}`. The submission POST is never automatically retried. If its response is lost, the server queries by external ID and recovers the accepted task. If it still cannot be found, the job is left `processing` (never failed) so later polls reconcile it by external ID — this prevents a duplicate paid generation and prevents a second submission from an included-plan retry.
 - Poll: GET `/tasks?task_ids={id}` until `succeeded` or `failed`. A successful output URL is downloaded immediately and archived to private Supabase Storage because Kling clears generated outputs after 30 days. The application continues polling rather than using `callback_url`, so no unauthenticated callback route is exposed.
-- All photos still influence the Inworld property analysis and final prompt. The official Image-to-Video endpoint receives only the documented first/last frame references; arbitrary OpenRouter-style `input_references` are not sent.
+- All photos still influence the Inworld property analysis and final prompt. The official Image-to-Video endpoint receives only the documented first/last frame references.
 - Provider configuration is checked before a paid job is reserved. Transient Inworld request/response failures use the preservation-focused fallback prompt; missing credentials do not silently bypass analysis.
-- `OPENROUTER_API_KEY` is no longer used for new generations. It is optional only while unprefixed legacy OpenRouter processing jobs remain; remove it after those jobs finish. New official Kling task IDs are stored with a `kling:` prefix in the existing physical `openrouterJobId` database column for zero-downtime compatibility.
+- Video generation uses the official Kling API exclusively; there is no OpenRouter (or any other) fallback provider. New Kling task IDs are stored with a `kling:` prefix. The database column that holds them keeps its historical physical name (`openrouterJobId`) purely for zero-downtime compatibility and is mapped to the provider-neutral `providerTaskId` field in code — no OpenRouter code, credential, or network call remains.
 - `KLING_LIVE_TEST=1` is test-only and opts into a no-generation credential query; do not set it for normal runtime.
 
 ## Complete production variables
 - Core: `DATABASE_URL`, `JWT_SECRET`; `VITE_APP_ID` is optional and defaults to `estatetour-ai`.
 - Storage: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`; optional `SUPABASE_STORAGE_BUCKET` defaults to `property-media`.
-- AI: required `INWORLD_API_KEY`, `KLING_API_KEY`; optional `INWORLD_VISION_MODEL`, `KLING_API_BASE_URL`; temporary optional `OPENROUTER_API_KEY` only for draining legacy processing jobs.
+- AI: required `INWORLD_API_KEY`, `KLING_API_KEY`; optional `INWORLD_VISION_MODEL`, `KLING_API_BASE_URL`.
 - Billing/auth variables remain required only for the corresponding Stripe/OAuth deployment paths.
 
 ## Design system (client/src/index.css)

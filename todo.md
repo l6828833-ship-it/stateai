@@ -5,7 +5,7 @@
 - [x] DB migration generated and applied
 - [x] Supabase Storage upload pipeline with strict sequenceIndex metadata per image
 - [x] tRPC procedures: project create/get/update, image upload/reorder/delete, settings persistence
-- [x] Official Kling AI integration module (server-side only, hidden from users; legacy OpenRouter jobs can drain)
+- [x] Official Kling AI integration module (server-side only, hidden from users; sole video provider, no OpenRouter)
 - [x] Inworld/Claude prompt optimizer: send all ordered images in one multimodal call and return a structured plan plus Kling prompt
 - [x] Kling 3.0 image-to-video generation through the official API, 1080p with audio and watermark disabled, only for active subscribers
 - [x] Generation job tracking with status polling (statuses exactly: processing, ready, failed)
