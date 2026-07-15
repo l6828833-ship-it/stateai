@@ -116,7 +116,7 @@ export default function Dashboard() {
         // Push settings first.
         await settingsMutation.mutateAsync({
           projectId: project.id,
-          aspectRatio: draft.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9",
+          aspectRatio: draft.aspectRatio as "16:9" | "9:16" | "1:1",
         });
         // Upload images strictly one-by-one, in draft order, so the
         // server-assigned sequence indexes match the user's arrangement.
@@ -230,7 +230,7 @@ export default function Dashboard() {
     settingsMutation.mutate({
       projectId: project.id,
       ...(patch.aspectRatio
-        ? { aspectRatio: patch.aspectRatio as "16:9" | "9:16" | "1:1" | "4:3" | "21:9" }
+        ? { aspectRatio: patch.aspectRatio as "16:9" | "9:16" | "1:1" }
         : {}),
     });
   };

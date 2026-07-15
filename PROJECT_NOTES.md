@@ -18,14 +18,21 @@
 - The service-role key must remain server-only. Never prefix it with `VITE_` or expose it to browser code.
 - Existing `/manus-storage/{key}` application URLs are retained as a compatibility proxy to Supabase signed URLs.
 
-## OpenRouter integration (server/openrouter.ts)
-- Video: POST https://openrouter.ai/api/v1/videos with model "bytedance/seedance-2.0", fields: prompt, duration, resolution, aspect_ratio, generate_audio, input_references:[{type:"image_url",image_url:{url}}]
-- Poll: GET /api/v1/videos/{jobId} → status: pending/processing/completed/failed/cancelled/expired; unsigned_urls[0] = video
-- Download: GET /api/v1/videos/{jobId}/content?index=0 (Bearer auth)
-- Prompt optimizer: anthropic/claude-sonnet-4.5 via /chat/completions multimodal (all images one call), returns JSON {sequence:[...], optimized_prompt}
-- Seedance 2.0 pricing: from $0.06726/second
-- IMPORTANT: sandbox egress IP is blocked by OpenRouter Cloudflare (403 "Access denied by security policy" on ALL endpoints incl. unauthenticated). Production likely fine. Live test gated behind OPENROUTER_LIVE_TEST=1 env in server/openrouter.test.ts
-- OPENROUTER_API_KEY is set in env (sk-or-v1-..., 73 chars)
+## AI generation deployment
+- Required server secrets: `INWORLD_API_KEY` (the Base64 credential copied from Inworld) and `OPENROUTER_API_KEY` (an OpenRouter key, normally starting with `sk-or-`). Never expose either key through a `VITE_` variable.
+- Optional model overrides: `INWORLD_VISION_MODEL` defaults to `anthropic/claude-sonnet-4-6`; `OPENROUTER_VIDEO_MODEL` defaults to `kwaivgi/kling-v3.0-pro`. Leave these unset to use the reviewed defaults.
+- Inworld analysis: POST `https://api.inworld.ai/v1/chat/completions` with Basic authentication. Every signed image URL is sent in sequence order in one multimodal request. Claude returns the per-photo plan, optimized combined prompt, and an AI-selected duration clamped to 4–15 seconds.
+- OpenRouter generation: POST `https://openrouter.ai/api/v1/videos` with Bearer authentication, Kling 3.0 Pro, `resolution: "1080p"`, `generate_audio: false`, and ordered `input_references`. Supported Kling ratios exposed by the app are `16:9`, `9:16`, and `1:1`.
+- Poll: GET `/api/v1/videos/{jobId}` until completed/failed/cancelled/expired. Completed output is downloaded from `unsigned_urls[0]` or `/content?index=0`, archived to private Supabase Storage, and returned through a signed URL.
+- Provider configuration is checked before a paid job is created. Transient Inworld request/response failures use the preservation-focused fallback prompt; missing credentials do not silently bypass analysis.
+- The model is strongly instructed to preserve rooms, furniture, materials, textures, composition, and image order. Generative video cannot guarantee pixel-identical frames, so the UI does not promise impossible lossless output.
+- `OPENROUTER_LIVE_TEST=1` is test-only and opts into a lightweight live credential check; do not set it for normal runtime.
+
+## Complete production variables
+- Core: `DATABASE_URL`, `JWT_SECRET`; `VITE_APP_ID` is optional and defaults to `estatetour-ai`.
+- Storage: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`; optional `SUPABASE_STORAGE_BUCKET` defaults to `property-media`.
+- AI: `INWORLD_API_KEY`, `OPENROUTER_API_KEY`; optional model overrides are listed above.
+- Billing/auth variables remain required only for the corresponding Stripe/OAuth deployment paths.
 
 ## Design system (client/src/index.css)
 - Soft pink palette: bg #FFF6F9, blush #F7B8D0, rose #E894B5 (primary), charcoal #3A2E33
@@ -39,17 +46,17 @@
 - toClientJob strips optimizedPrompt + openrouterJobId + videoKey from all client responses
 - shared/plans.ts: PLANS array (starter $9/mo, annual $29/yr, pro $39/mo highlighted, business $99/mo), TOUR_STYLES exactly ["Walkthrough","Drone","Cinematic"], RESOLUTIONS, ASPECT_RATIOS, DURATIONS, MAX_IMAGES=20
 
-## Frontend done so far
-- client/src/hooks/useToolDraft.ts: localStorage guest draft (images as dataURLs downscaled 1600px, settings, pendingGenerate flag), fileToDataUrl helper
-- client/src/components/TourTool.tsx: shared tool (upload zone w/ breathing border, drag-reorder timeline w/ numbered pills + arrows, style selector 3 cards, creative textarea, res/aspect/duration selects, glowing Generate button)
+## Frontend generation flow
+- `client/src/hooks/useToolDraft.ts`: lightweight settings in localStorage and high-quality image payloads in IndexedDB; legacy unsupported ratios normalize to 16:9.
+- `client/src/lib/imageUpload.ts`: files at or below 10 MiB are uploaded byte-for-byte; larger photos are resized/re-encoded only enough to fit the server limit.
+- `client/src/components/TourTool.tsx`: numbered Image 1…N timeline with drag/arrow reordering and only Kling-supported aspect ratios, each with an icon and destination hint. AI chooses camera style and duration.
+- `client/src/pages/Dashboard.tsx`: uploads one-by-one in user order, starts authenticated generation, polls active jobs every five seconds, and displays signed Supabase video URLs.
 
-## Test status (Phase 6, in progress)
-- All 15 vitest tests pass (billing: Stripe live auth + price creation OK; tour: styles/status labels/hidden fields/ordering guard OK)
-- Homepage verified: upload 3 test photos (/home/ubuntu/test-photos/room*.jpg) works, reorder timeline renders, Generate → redirects to Manus OAuth sign-in (gate works)
-- Dashboard renders (Welcome back Slim, tool + Output + Your videos)
-- Stripe billing endpoints: /api/billing/checkout (auth-gated 401 OK), /api/stripe/webhook registered w/ raw body
-- Browser test halted at Manus login page (sandbox browser can't complete owner OAuth) — dashboard fake-gen flow verified earlier via screenshot session where user was auto-logged
-- Remaining to verify: fake generation animation → blurred preview → pricing popup (need logged-in preview session); then checkpoint + deliver
+## Current verification notes
+- Changed AI/provider modules transpile successfully with Bun, and mocked Inworld/OpenRouter contract checks verify endpoint, auth, model, strict image ordering, 1080p, no audio, aspect ratio, and duration handling.
+- `git diff --check` passes and the blocker-level semantic review is approved.
+- Full Vitest/typecheck execution requires installed project dependencies. The sandbox used for this audit has no `node_modules` and cannot download packages through its restricted network.
+- Live provider authentication/model access still must be verified after setting the production secrets; mocked checks do not spend provider credits.
 
 ## Remaining
 - Home.tsx (in progress — full cinematic landing w/ hero blobs, parallax, features, how-it-works, embedded TourTool, sign-up gate via startLogin from @/const)

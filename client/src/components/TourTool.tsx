@@ -12,12 +12,10 @@ import {
   Camera,
   Check,
   Clapperboard,
-  Film,
   GripVertical,
   ImagePlus,
   Loader2,
   Monitor,
-  RectangleHorizontal,
   Smartphone,
   Square,
   Trash2,
@@ -59,8 +57,6 @@ const ASPECT_META: Record<
   "16:9": { icon: Monitor, name: "Widescreen", hint: "YouTube, websites & landscape" },
   "9:16": { icon: Smartphone, name: "Vertical", hint: "Reels, TikTok & Stories" },
   "1:1": { icon: Square, name: "Square", hint: "Instagram feed posts" },
-  "4:3": { icon: RectangleHorizontal, name: "Classic", hint: "Standard photo frame" },
-  "21:9": { icon: Film, name: "Cinematic", hint: "Ultra-wide film look" },
 };
 
 export default function TourTool({
@@ -348,8 +344,8 @@ export default function TourTool({
           Just set the order and aspect ratio — our AI does the rest. It studies each photo, picks
           the best cinematic style and camera move for every shot (aerial reveals for exteriors,
           smooth glides inside rooms), and chooses the perfect length automatically (up to 15s).
-          Every tour renders in crisp 1080p with your original photos kept pixel-perfect — no
-          cropping, no quality loss.
+          Every tour renders in crisp 1080p and instructs the video model to preserve the source
+          rooms, furniture, materials, and composition as closely as possible.
         </p>
       </div>
 
