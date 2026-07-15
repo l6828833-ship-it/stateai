@@ -124,6 +124,79 @@ export function klingExternalTaskIdForJob(jobId: number): string {
 }
 
 /**
+ * Deterministic external id for one segment of a multi-image tour. Because it
+ * is derived purely from (jobId, segmentIndex), polling can reconcile every
+ * segment by external id without persisting each Kling task id.
+ */
+export function klingSegmentExternalTaskId(
+  jobId: number,
+  segmentIndex: number,
+): string {
+  if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+    throw new Error("A positive generation job id is required");
+  }
+  if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {
+    throw new Error("Segment index must be a non-negative integer");
+  }
+  return `estatetour-generation-${jobId}-seg-${segmentIndex}`;
+}
+
+export interface KlingSegmentPlan {
+  index: number;
+  /** The 1-2 frames for this segment (first, optional last), re-based to 0/1. */
+  images: OrderedImage[];
+}
+
+/**
+ * Plan the ordered first/last-frame segments that cover EVERY image.
+ * - 1 image  → 1 single-frame segment.
+ * - N images → N-1 segments, each spanning consecutive images
+ *   (segment i: first_frame = image i, last_frame = image i+1).
+ * Concatenating the segment videos in order yields a tour that visits every
+ * uploaded image, since each image is the last frame of one segment and the
+ * first frame of the next.
+ */
+export function planKlingSegments(images: OrderedImage[]): KlingSegmentPlan[] {
+  const ordered = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+  if (ordered.length === 0) {
+    throw new Error("No images to plan Kling segments");
+  }
+  if (ordered.length === 1) {
+    return [
+      {
+        index: 0,
+        images: [
+          {
+            sequenceIndex: 0,
+            publicUrl: ordered[0].publicUrl,
+            roomTag: ordered[0].roomTag,
+          },
+        ],
+      },
+    ];
+  }
+  const segments: KlingSegmentPlan[] = [];
+  for (let i = 0; i < ordered.length - 1; i++) {
+    segments.push({
+      index: i,
+      images: [
+        {
+          sequenceIndex: 0,
+          publicUrl: ordered[i].publicUrl,
+          roomTag: ordered[i].roomTag,
+        },
+        {
+          sequenceIndex: 1,
+          publicUrl: ordered[i + 1].publicUrl,
+          roomTag: ordered[i + 1].roomTag,
+        },
+      ],
+    });
+  }
+  return segments;
+}
+
+/**
  * Store official Kling task ids with an explicit `kling:` prefix so the stored
  * value is unambiguous and self-describing.
  */
@@ -334,12 +407,8 @@ export async function submitKlingVideo(params: {
   return { taskId: task.id, externalTaskId: params.externalTaskId };
 }
 
-/** Query one official Kling task and normalize its status for the application. */
-export async function pollKlingJob(taskId: string): Promise<KlingPollResult> {
-  const tasks = await queryKlingTasks({ taskIds: taskId });
-  const task = tasks.find((candidate) => candidate.id === taskId);
-  if (!task) throw new Error("Kling task query returned no matching task");
-
+/** Normalize one Kling task record into the application's status shape. */
+function normalizeKlingTask(task: KlingTask): KlingPollResult {
   if (task.status === "submitted") {
     return { status: "pending", videoUrl: null, error: null };
   }
@@ -363,6 +432,62 @@ export async function pollKlingJob(taskId: string): Promise<KlingPollResult> {
     };
   }
   return { status: "completed", videoUrl: video.url, error: null };
+}
+
+/** Query one official Kling task and normalize its status for the application. */
+export async function pollKlingJob(taskId: string): Promise<KlingPollResult> {
+  const tasks = await queryKlingTasks({ taskIds: taskId });
+  const task = tasks.find((candidate) => candidate.id === taskId);
+  if (!task) throw new Error("Kling task query returned no matching task");
+  return normalizeKlingTask(task);
+}
+
+export interface KlingSegmentStatus extends KlingPollResult {
+  externalTaskId: string;
+  /** False when Kling has no task yet for this external id (not submitted/visible). */
+  found: boolean;
+}
+
+/**
+ * Poll many segments in a single batch query by their external ids. A segment
+ * that Kling does not (yet) know about is returned as `found: false` /
+ * `pending`, so the caller keeps waiting instead of failing the whole job.
+ */
+export async function pollKlingSegments(
+  externalTaskIds: string[],
+): Promise<KlingSegmentStatus[]> {
+  if (externalTaskIds.length === 0) {
+    throw new Error("No segment external task ids to poll");
+  }
+  // Keep commas literal (batch separator); each id is already URL-safe.
+  const query = externalTaskIds.map((id) => encodeURIComponent(id)).join(",");
+  const response = await fetch(
+    `${getApiBase()}${TASKS_PATH}?external_task_ids=${query}`,
+    {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  );
+  const tasks = await parseEnvelope<KlingTask[]>(response, "Kling segment status query");
+
+  const byExternalId = new Map<string, KlingTask>();
+  for (const task of tasks) {
+    if (task.external_id) byExternalId.set(task.external_id, task);
+  }
+
+  return externalTaskIds.map((externalTaskId) => {
+    const task = byExternalId.get(externalTaskId);
+    if (!task) {
+      return {
+        externalTaskId,
+        found: false,
+        status: "pending",
+        videoUrl: null,
+        error: null,
+      };
+    }
+    return { externalTaskId, found: true, ...normalizeKlingTask(task) };
+  });
 }
 
 /** Download Kling's temporary output immediately for permanent private storage. */
