@@ -18,11 +18,10 @@ export const ENV = {
     process.env.INWORLD_VISION_MODEL || "anthropic/claude-sonnet-4-6",
   // Official Kling 3.0 video generation. The API base defaults to the
   // documented Singapore region and can be overridden for another official
-  // regional endpoint. OPENROUTER_API_KEY is optional legacy-drain support.
+  // regional endpoint.
   klingApiKey: process.env.KLING_API_KEY ?? "",
   klingApiBaseUrl:
     process.env.KLING_API_BASE_URL || "https://api-singapore.klingai.com",
-  openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
   isProduction: process.env.NODE_ENV === "production",
