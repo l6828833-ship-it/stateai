@@ -10,6 +10,14 @@
 - /manus-storage/hero-aerial_18f0bf6c.jpg (aerial drone house)
 - /manus-storage/hero-kitchen2_815b2217.jpg (luxury kitchen)
 
+## Supabase Storage (server/storage.ts)
+- Uploaded property photos, generated images, and finished videos are stored in a private Supabase Storage bucket.
+- Required server environment variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`; optional `SUPABASE_STORAGE_BUCKET` defaults to `property-media`.
+- Create the bucket in Supabase Dashboard → Storage before uploading. Keep it private; the server issues one-hour signed URLs for previews, AI input references, and downloads.
+- Existing Forge objects are not copied automatically. Before cutover, upload any objects that must survive under the same keys—especially `hero-living_b05098b0.jpg`, `hero-kitchen2_815b2217.jpg`, `hero-aerial_18f0bf6c.jpg`, and any keys already stored in `project_images.fileKey` / `generation_jobs.videoKey`.
+- The service-role key must remain server-only. Never prefix it with `VITE_` or expose it to browser code.
+- Existing `/manus-storage/{key}` application URLs are retained as a compatibility proxy to Supabase signed URLs.
+
 ## OpenRouter integration (server/openrouter.ts)
 - Video: POST https://openrouter.ai/api/v1/videos with model "bytedance/seedance-2.0", fields: prompt, duration, resolution, aspect_ratio, generate_audio, input_references:[{type:"image_url",image_url:{url}}]
 - Poll: GET /api/v1/videos/{jobId} → status: pending/processing/completed/failed/cancelled/expired; unsigned_urls[0] = video
@@ -27,8 +35,8 @@
 ## Backend done
 - drizzle/schema.ts: projects, project_images (sequenceIndex strict), generation_jobs (status: processing/ready/failed exactly), subscriptions (plan: starter/pro/annual/business); migration applied
 - server/db.ts: full helpers incl. reorderProjectImages (validates exact id set, two-phase update), hasActiveSubscription
-- server/routers/tour.ts: getState, updateSettings, uploadImage (base64, server-assigned seq idx, S3 key user-{id}/project-{id}/seq-NNN.ext), reorderImages, deleteImage, updateRoomTag, generate (subscription-gated, hidden prompt optimization, fallback prompt), pollJob (downloads video to S3 on complete), listJobs, getDownloadUrl (sub-gated)
-- toClientJob strips optimizedPrompt + openrouterJobId from all client responses
+- server/routers/tour.ts: getState, updateSettings, uploadImage (base64, server-assigned seq idx, Supabase Storage key user-{id}/project-{id}/seq-NNN.ext), reorderImages, deleteImage, updateRoomTag, generate (subscription-gated, hidden prompt optimization, fallback prompt), pollJob (downloads video to Supabase Storage on complete), listJobs, getDownloadUrl (sub-gated)
+- toClientJob strips optimizedPrompt + openrouterJobId + videoKey from all client responses
 - shared/plans.ts: PLANS array (starter $9/mo, annual $29/yr, pro $39/mo highlighted, business $99/mo), TOUR_STYLES exactly ["Walkthrough","Drone","Cinematic"], RESOLUTIONS, ASPECT_RATIOS, DURATIONS, MAX_IMAGES=20
 
 ## Frontend done so far
