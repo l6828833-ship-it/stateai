@@ -5,11 +5,11 @@
 - [x] DB migration generated and applied
 - [x] Supabase Storage upload pipeline with strict sequenceIndex metadata per image
 - [x] tRPC procedures: project create/get/update, image upload/reorder/delete, settings persistence
-- [x] OpenRouter integration module (server-side only, hidden from user)
+- [x] Official Kling AI integration module (server-side only, hidden from users; legacy OpenRouter jobs can drain)
 - [x] Inworld/Claude prompt optimizer: send all ordered images in one multimodal call and return a structured plan plus Kling prompt
-- [x] Kling 3.0 Pro video generation via OpenRouter, 1080p with audio disabled, only for active subscribers
+- [x] Kling 3.0 image-to-video generation through the official API, 1080p with audio and watermark disabled, only for active subscribers
 - [x] Generation job tracking with status polling (statuses exactly: processing, ready, failed)
-- [x] `INWORLD_API_KEY` and `OPENROUTER_API_KEY` documented as required server secrets
+- [x] `INWORLD_API_KEY` and `KLING_API_KEY` documented as required server secrets
 
 ## Homepage (public)
 - [x] Cinematic soft-pink design system (palette #FFF6F9 / #F7B8D0 / #E894B5 / #3A2E33) in index.css + Google fonts
@@ -34,7 +34,7 @@
 
 ## Billing
 - [x] Stripe integration via add_feature
-- [x] 4 subscription plans wired to Stripe checkout
+- [x] 2 subscription plans wired to Stripe checkout
 - [x] Subscription allowances enforced atomically: 36/year or 3/month, with a verified one-time $15 additional-video checkout
 - [x] Billing portal access from dashboard
 - [x] Webhook handling for subscription lifecycle
@@ -51,6 +51,6 @@
 - [ ] Final checkpoint and delivery
 
 ## QA & Delivery (Phase 1)
-- [x] Vitest tests for image ordering, gating logic, job status transitions (15 tests pass: billing auth/pricing, tour styles/labels/hidden fields/ordering guard)
+- [x] Vitest coverage for image ordering, gating, client-field hiding, billing, and the official Kling request contract
 - [x] Visual verification: homepage, dashboard, pricing popup (screenshot verified)
 - [x] Checkpoint saved and delivery message

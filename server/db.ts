@@ -458,7 +458,8 @@ export async function reserveGenerationJob(
         // A Checkout Session is an at-most-once entitlement. Returning the
         // permanently associated job is safe after refreshes, lost responses,
         // process crashes, and ambiguous provider timeouts. It must never be
-        // submitted again because OpenRouter offers no verified idempotency key.
+        // submitted again. Official Kling's unique external task id also lets
+        // polling recover an accepted task after a lost submission response.
         return { ok: true, job: existing, shouldSubmit: false } as const;
       }
 
@@ -532,7 +533,7 @@ export async function updateGenerationJob(
     status: "processing" | "ready" | "failed";
     optimizedPrompt: string;
     clipDuration: number;
-    openrouterJobId: string;
+    providerTaskId: string;
     videoKey: string;
     videoUrl: string;
     thumbnailUrl: string;
@@ -544,7 +545,7 @@ export async function updateGenerationJob(
   await db.update(generationJobs).set(patch).where(eq(generationJobs.id, jobId));
 }
 
-/** Jobs still processing that have an OpenRouter job id (need polling). */
+/** Jobs still processing and available for provider reconciliation/polling. */
 export async function listProcessingJobs(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
