@@ -41,10 +41,10 @@
 
 ## Backend done
 - drizzle/schema.ts: projects, project_images (sequenceIndex strict), generation_jobs (status: processing/ready/failed exactly), subscriptions (plan: starter/pro/annual/business); migration applied
-- server/db.ts: full helpers incl. reorderProjectImages (validates exact id set, two-phase update), hasActiveSubscription
+- `server/db.ts` atomically reserves plan usage under a per-user Postgres advisory lock: exact v2 prices receive 36 included generations per exact Stripe yearly period or 3 per exact monthly period. Exact known v1 prices retain their sold access; unknown or malformed prices fail closed. Failed included jobs stop consuming allowance; each paid $15 add-on Checkout Session is permanently attached to one at-most-once job and never automatically resubmitted after an ambiguous provider failure.
 - server/routers/tour.ts: getState, updateSettings, uploadImage (base64, server-assigned seq idx, Supabase Storage key user-{id}/project-{id}/seq-NNN.ext), reorderImages, deleteImage, updateRoomTag, generate (subscription-gated, hidden prompt optimization, fallback prompt), pollJob (downloads video to Supabase Storage on complete), listJobs, getDownloadUrl (sub-gated)
-- toClientJob strips optimizedPrompt + openrouterJobId + videoKey from all client responses
-- shared/plans.ts: PLANS array (starter $9/mo, annual $29/yr, pro $39/mo highlighted, business $99/mo), TOUR_STYLES exactly ["Walkthrough","Drone","Cinematic"], RESOLUTIONS, ASPECT_RATIOS, DURATIONS, MAX_IMAGES=20
+- `toClientJob` strips `optimizedPrompt`, `openrouterJobId`, `videoKey`, and internal `imageSequence`/Checkout Session data from responses; it exposes only a safe `additionalVideo` flag so failed paid jobs show support/refund guidance instead of an unsafe Retry action.
+- `shared/plans.ts`: customer checkout offers Yearly first ($29/year, 36 videos/year) and Monthly ($39/month, 3 videos/month); both list 10 images/video, 1080p, all supported ratios, viral effects, $15 additional videos, priority queue, no watermark, and high-quality cinematic output. `MAX_IMAGES=10`.
 
 ## Frontend generation flow
 - `client/src/hooks/useToolDraft.ts`: lightweight settings in localStorage and high-quality image payloads in IndexedDB; legacy unsupported ratios normalize to 16:9.
@@ -60,8 +60,8 @@
 
 ## Remaining
 - Home.tsx (in progress — full cinematic landing w/ hero blobs, parallax, features, how-it-works, embedded TourTool, sign-up gate via startLogin from @/const)
-- Dashboard page: mirrors tool, syncs draft→server after login, fake generation animation for non-subscribers → blurred video + pricing popup (4 plans), real generation for subscribers, job history (processing/ready/failed), billing portal
+- Dashboard paywall: non-subscriber generation animation completes once, stays on the locked blurred preview, then opens the two-plan pricing popup; callback re-renders cannot restart it and real video playback remains subscription-gated.
 - Stripe: webdev_add_feature feature="stripe" (not yet run)
 - App.tsx routes: / (Home), /dashboard
-- Stripe plan wiring uses shared/plans.ts
-- User asked: $29/yr annual "early bird", 4 plans total; fake gen animation THEN blurred preview THEN pricing popup over it
+- Stripe creates and validates exact versioned recurring prices for Yearly/Monthly plus a one-time USD $15 additional-video checkout. Redemption verifies the paid total, currency, line item, signed-in user, and a recognized active recurring plan. The browser persists the Checkout Session and associated job until completion; the server permanently returns that same job after refresh or a lost response and never resubmits one payment after an ambiguous provider failure.
+- Current pricing: Yearly $29/year (36 videos) is first/default; Monthly $39/month includes 3 videos. Both advertise the same 1080p cinematic feature set and $15 additional videos.

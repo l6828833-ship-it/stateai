@@ -154,8 +154,9 @@ export type GenerationJob = typeof generationJobs.$inferSelect;
 export type InsertGenerationJob = typeof generationJobs.$inferInsert;
 
 /**
- * Stripe subscription state per user. Plans: starter ($9/mo), pro ($39/mo),
- * annual ($29/yr), business ($99/mo).
+ * Stripe subscription state per user. Customer-facing checkout offers Yearly
+ * (`annual`, $29/year) and Monthly (`pro`, $39/month). Legacy enum values stay
+ * valid so existing subscriptions continue to deserialize safely.
  */
 export const subscriptions = pgTable("subscriptions", {
   id: serial("id").primaryKey(),

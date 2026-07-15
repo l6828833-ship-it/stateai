@@ -27,7 +27,7 @@
 - [x] Soft pink sidebar layout, top bar with cost/usage ring
 - [x] Photo sequence timeline: horizontal thumbnails, numbered badges, drag reorder with spring ease, room tag chips
 - [x] Fake generation animation for non-paying users: realistic multi-stage progress, then blurred/frosted video preview with pricing popup on top
-- [x] Modern pricing popup modal: 4 plans with feature comparison — Starter $9/mo, Pro $39/mo, Annual $29/yr, Business $99/mo
+- [x] Modern pricing popup modal: Yearly $29/year (36 videos) first, Monthly $39/month (3 videos), shared 1080p/no-watermark feature set
 - [x] Real generation flow for subscribers: job created, progress shown, video ready + download
 - [x] Project history: past jobs with status indicators (processing, ready, failed), thumbnails, re-download, regenerate
 - [x] Stats row with animated count-up numbers
@@ -35,7 +35,7 @@
 ## Billing
 - [x] Stripe integration via add_feature
 - [x] 4 subscription plans wired to Stripe checkout
-- [x] Subscription status checked server-side before any real generation
+- [x] Subscription allowances enforced atomically: 36/year or 3/month, with a verified one-time $15 additional-video checkout
 - [x] Billing portal access from dashboard
 - [x] Webhook handling for subscription lifecycle
 

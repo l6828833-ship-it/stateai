@@ -23,6 +23,10 @@ import {
   type OrderedImage,
 } from "../openrouter";
 import { storageGetSignedUrl, storagePut } from "../storage";
+import {
+  getStripeGenerationEntitlement,
+  verifyAdditionalVideoCheckout,
+} from "../billing";
 import { protectedProcedure, router } from "../_core/trpc";
 
 const PNG_SIGNATURE = Buffer.from([
@@ -168,13 +172,40 @@ function hasValidImageStructure(buffer: Buffer, mimeType: string): boolean {
 /** Strip server-only fields before returning a job to the client. */
 type GenerationJob = NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>;
 
+function isAdditionalVideoJob(imageSequence: string | null): boolean {
+  if (!imageSequence) return false;
+  try {
+    const parsed = JSON.parse(imageSequence) as unknown;
+    return Boolean(
+      parsed &&
+        typeof parsed === "object" &&
+        "additionalCheckoutSessionId" in parsed &&
+        typeof (parsed as { additionalCheckoutSessionId?: unknown })
+          .additionalCheckoutSessionId === "string",
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function toClientJob(job: GenerationJob) {
-  const { optimizedPrompt, openrouterJobId, videoKey, errorMessage, ...safe } = job;
+  const {
+    optimizedPrompt,
+    openrouterJobId,
+    videoKey,
+    errorMessage,
+    imageSequence,
+    ...safe
+  } = job;
+  const additionalVideo = isAdditionalVideoJob(imageSequence);
   return {
     ...safe,
+    additionalVideo,
     errorMessage:
       job.status === "failed"
-        ? "Video generation failed. Please try again or contact support."
+        ? additionalVideo
+          ? "Your paid additional video failed and was not resubmitted. Contact support for a refund or replacement."
+          : "Video generation failed. Please try again or contact support."
         : null,
   };
 }
@@ -383,7 +414,12 @@ export const tourRouter = router({
    *   4. submit a Kling 3.0 Pro job, persist job row with status "processing"
    */
   generate: protectedProcedure
-    .input(z.object({ projectId: z.number() }))
+    .input(
+      z.object({
+        projectId: z.number(),
+        additionalCheckoutSessionId: z.string().max(255).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const subscribed = await db.hasActiveSubscription(ctx.user.id);
       if (!subscribed) {
@@ -418,6 +454,12 @@ export const tourRouter = router({
       if (images.length < 1) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Upload at least one photo first" });
       }
+      if (images.length > MAX_IMAGES) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Use no more than ${MAX_IMAGES} photos per video`,
+        });
+      }
       // Validate strict, gapless ordering before spending anything.
       const sorted = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
       for (let i = 0; i < sorted.length; i++) {
@@ -429,19 +471,83 @@ export const tourRouter = router({
         }
       }
 
-      // Create the job row first so failures are tracked. Resolution is always
-      // 1080p; clipDuration is a placeholder until the AI decides the ideal one.
-      const job = await db.createGenerationJob({
-        projectId: project.id,
-        userId: ctx.user.id,
-        status: "processing",
-        tourStyle: project.tourStyle,
-        resolution: OUTPUT_RESOLUTION,
-        aspectRatio,
-        clipDuration: defaultDurationFor(sorted.length),
-        imageSequence: JSON.stringify(sorted.map((i) => i.id)),
-        thumbnailUrl: sorted[0]?.url ?? null,
-      });
+      let additionalCheckoutSessionId: string | undefined;
+      if (input.additionalCheckoutSessionId) {
+        try {
+          const paid = await verifyAdditionalVideoCheckout(
+            input.additionalCheckoutSessionId,
+            ctx.user.id,
+          );
+          if (!paid) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "The additional-video payment could not be verified",
+            });
+          }
+          additionalCheckoutSessionId = input.additionalCheckoutSessionId;
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          console.error("[Generation] Additional-video verification failed", error);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "The additional-video payment could not be verified",
+          });
+        }
+      }
+
+      let billingEntitlement:
+        | { periodStart: Date; enforceAllowance: boolean; planId?: "annual" | "pro" }
+        | undefined;
+      try {
+        billingEntitlement =
+          (await getStripeGenerationEntitlement(ctx.user.id)) ?? undefined;
+      } catch (error) {
+        console.error("[Generation] Could not verify Stripe entitlement", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Your plan allowance could not be verified. Please try again.",
+        });
+      }
+
+      // Reserve the plan allowance and create the job under one database lock.
+      // This prevents concurrent requests from both claiming the final video.
+      const reservation = await db.reserveGenerationJob(
+        {
+          projectId: project.id,
+          userId: ctx.user.id,
+          status: "processing",
+          tourStyle: project.tourStyle,
+          resolution: OUTPUT_RESOLUTION,
+          aspectRatio,
+          clipDuration: defaultDurationFor(sorted.length),
+          thumbnailUrl: sorted[0]?.url ?? null,
+        },
+        sorted.map((image) => image.id),
+        additionalCheckoutSessionId,
+        billingEntitlement,
+      );
+      if (!reservation.ok) {
+        if (reservation.reason === "limit_reached") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Your plan's ${reservation.allowance}-video allowance is used. Additional videos are $15 each.`,
+          });
+        }
+        if (reservation.reason === "period_unavailable") {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Your plan allowance could not be verified. Please contact support.",
+          });
+        }
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "An active subscription is required to generate videos",
+        });
+      }
+      const job = reservation.job;
+      if (!reservation.shouldSubmit) {
+        return toClientJobWithMedia(job, true);
+      }
 
       try {
         const orderedPublic = await toPublicOrderedImages(sorted);
@@ -481,6 +587,14 @@ export const tourRouter = router({
         const message =
           "Video generation could not be started. Please try again or contact support.";
         await db.updateGenerationJob(job.id, { status: "failed", errorMessage: message });
+        if (additionalCheckoutSessionId) {
+          // The paid Session is already consumed by this at-most-once job.
+          // Return the terminal job so the browser can immediately clear its
+          // pending Session and show refund/replacement guidance without a
+          // misleading second Generate click.
+          const failedJob = await db.getGenerationJob(job.id, ctx.user.id);
+          if (failedJob) return toClientJobWithMedia(failedJob, false);
+        }
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
       }
     }),

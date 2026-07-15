@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest";
 import { PLANS, PLAN_BY_ID } from "../shared/plans";
 
 describe("billing plans", () => {
-  it("defines exactly the 4 required plans with correct pricing", () => {
-    expect(PLANS).toHaveLength(4);
-    expect(PLAN_BY_ID.starter.price).toBe(9);
-    expect(PLAN_BY_ID.starter.interval).toBe("month");
-    expect(PLAN_BY_ID.pro.price).toBe(39);
-    expect(PLAN_BY_ID.pro.interval).toBe("month");
+  it("defines the yearly and monthly plans with correct pricing", () => {
+    expect(PLANS).toHaveLength(2);
+    expect(PLANS.map((plan) => plan.id)).toEqual(["annual", "pro"]);
     expect(PLAN_BY_ID.annual.price).toBe(29);
     expect(PLAN_BY_ID.annual.interval).toBe("year");
-    expect(PLAN_BY_ID.business.price).toBe(99);
-    expect(PLAN_BY_ID.business.interval).toBe("month");
+    expect(PLAN_BY_ID.annual.videoAllowance).toBe("36 videos per year");
+    expect(PLAN_BY_ID.pro.price).toBe(39);
+    expect(PLAN_BY_ID.pro.interval).toBe("month");
+    expect(PLAN_BY_ID.pro.videoAllowance).toBe("3 videos per month");
   });
 
-  it("highlights the Pro plan in the pricing table", () => {
-    expect(PLAN_BY_ID.pro.highlighted).toBe(true);
+  it("places and highlights the yearly plan first", () => {
+    expect(PLANS[0].id).toBe("annual");
+    expect(PLAN_BY_ID.annual.highlighted).toBe(true);
   });
 
   it("has a Stripe secret key configured in the environment", () => {

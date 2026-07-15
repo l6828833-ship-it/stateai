@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, isNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -14,6 +14,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { PLAN_BY_ID, type PlanId } from "../shared/plans";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -382,11 +383,126 @@ export async function updateImageRoomTag(imageId: number, userId: number, roomTa
 
 // ===================== Generation Jobs =====================
 
-export async function createGenerationJob(job: InsertGenerationJob) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [row] = await db.insert(generationJobs).values(job).returning();
-  return row;
+type GenerationReservation =
+  | {
+      ok: true;
+      job: typeof generationJobs.$inferSelect;
+      shouldSubmit: boolean;
+    }
+  | {
+      ok: false;
+      reason:
+        | "inactive"
+        | "limit_reached"
+        | "period_unavailable";
+      allowance?: number;
+      used?: number;
+    };
+
+/**
+ * Atomically reserve a plan allowance and create its processing job. A
+ * per-user Postgres advisory lock prevents simultaneous requests from both
+ * claiming the final included video. Paid additional-video sessions are
+ * permanently associated with one job through the hidden imageSequence JSON.
+ */
+export async function reserveGenerationJob(
+  job: InsertGenerationJob,
+  imageIds: number[],
+  additionalCheckoutSessionId?: string,
+  billingEntitlement?: {
+    periodStart: Date;
+    enforceAllowance: boolean;
+    planId?: PlanId;
+  },
+): Promise<GenerationReservation> {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+
+  return database.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${job.userId})`);
+
+    const [subscription] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, job.userId))
+      .limit(1);
+    const active =
+      subscription &&
+      (subscription.status === "active" || subscription.status === "trialing") &&
+      (!subscription.currentPeriodEnd ||
+        subscription.currentPeriodEnd.getTime() >= Date.now() - 24 * 3600 * 1000);
+    if (!active) return { ok: false, reason: "inactive" } as const;
+    // The Stripe subscription and exact recurring price must be recognized for
+    // every generation path. Never infer entitlement from the denormalized DB plan.
+    if (!billingEntitlement) {
+      return { ok: false, reason: "period_unavailable" } as const;
+    }
+
+    if (additionalCheckoutSessionId) {
+      const [existing] = await tx
+        .select()
+        .from(generationJobs)
+        .where(
+          and(
+            eq(generationJobs.userId, job.userId),
+            sql`${generationJobs.imageSequence}::jsonb ->> 'additionalCheckoutSessionId' = ${additionalCheckoutSessionId}`,
+          ),
+        )
+        .limit(1);
+
+      const imageSequence = JSON.stringify({
+        imageIds,
+        additionalCheckoutSessionId,
+      });
+      if (existing) {
+        // A Checkout Session is an at-most-once entitlement. Returning the
+        // permanently associated job is safe after refreshes, lost responses,
+        // process crashes, and ambiguous provider timeouts. It must never be
+        // submitted again because OpenRouter offers no verified idempotency key.
+        return { ok: true, job: existing, shouldSubmit: false } as const;
+      }
+
+      const [created] = await tx
+        .insert(generationJobs)
+        .values({ ...job, imageSequence })
+        .returning();
+      return { ok: true, job: created, shouldSubmit: true } as const;
+    }
+
+    // Current v2 prices enforce the new limit using the plan classified from
+    // Stripe itself. Exact known v1 prices retain their previously sold access.
+    if (billingEntitlement.enforceAllowance) {
+      const entitlementPlanId = billingEntitlement.planId;
+      if (!entitlementPlanId) {
+        return { ok: false, reason: "period_unavailable" } as const;
+      }
+      const [usage] = await tx
+        .select({ value: count() })
+        .from(generationJobs)
+        .where(
+          and(
+            eq(generationJobs.userId, job.userId),
+            gte(generationJobs.createdAt, billingEntitlement.periodStart),
+            sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+            or(
+              eq(generationJobs.status, "processing"),
+              eq(generationJobs.status, "ready"),
+            ),
+          ),
+        );
+      const used = Number(usage?.value ?? 0);
+      const allowance = PLAN_BY_ID[entitlementPlanId].includedVideos;
+      if (used >= allowance) {
+        return { ok: false, reason: "limit_reached", allowance, used } as const;
+      }
+    }
+
+    const [created] = await tx
+      .insert(generationJobs)
+      .values({ ...job, imageSequence: JSON.stringify(imageIds) })
+      .returning();
+    return { ok: true, job: created, shouldSubmit: true } as const;
+  });
 }
 
 export async function getGenerationJob(jobId: number, userId: number) {
@@ -456,7 +572,7 @@ export async function upsertSubscription(
   patch: Partial<{
     stripeCustomerId: string;
     stripeSubscriptionId: string;
-    plan: "starter" | "pro" | "annual" | "business";
+    plan: "starter" | "pro" | "annual" | "business" | null;
     status: string;
     currentPeriodEnd: Date;
   }>,
