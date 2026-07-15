@@ -1,0 +1,6 @@
+# Railway/Nixpacks build configuration.
+# ffmpeg is required at runtime to concatenate Kling video segments into one
+# continuous tour video (see server/video.ts). aptPkgs are additive to the
+# auto-detected Node.js setup phase.
+[phases.setup]
+aptPkgs = ["ffmpeg"]

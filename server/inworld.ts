@@ -47,6 +47,15 @@ function getVisionModel(): string {
 export const MIN_CLIP_DURATION = 4;
 export const MAX_CLIP_DURATION = 15;
 
+/**
+ * Each rendered shot (a per-image transition of a multi-image tour, or the
+ * single clip of a one-image tour) has an AI-chosen length within this range.
+ * The maximum is a product cap: no individual shot is longer than 6 seconds.
+ */
+export const SEGMENT_MIN_DURATION = 3; // Kling's minimum clip length
+export const SEGMENT_MAX_DURATION = 6; // product cap per shot
+export const DEFAULT_SEGMENT_DURATION = 5;
+
 export interface AnalysisResult {
   /** Per-photo structured plan (room type, AI-chosen style, camera move, etc.) */
   sequence: Array<{
@@ -60,7 +69,13 @@ export interface AnalysisResult {
   }>;
   /** The single combined, optimized prompt for Kling. */
   optimizedPrompt: string;
-  /** AI-decided ideal clip length in seconds, clamped to [MIN,MAX]. */
+  /**
+   * AI-chosen length (whole seconds) for each shot, in order. Length equals the
+   * number of shots: N-1 for an N-image tour, or 1 for a single image. Each
+   * value is clamped to [SEGMENT_MIN_DURATION, SEGMENT_MAX_DURATION].
+   */
+  segmentDurations: number[];
+  /** Total video length (sum of segmentDurations), for record-keeping. */
   duration: number;
 }
 
@@ -68,6 +83,20 @@ export interface AnalysisResult {
 export function clampDuration(value: number | undefined | null): number {
   if (!value || !Number.isFinite(value)) return MIN_CLIP_DURATION;
   return Math.max(MIN_CLIP_DURATION, Math.min(MAX_CLIP_DURATION, Math.round(value)));
+}
+
+/** Clamp one AI-chosen shot length to [SEGMENT_MIN,SEGMENT_MAX]; default if absent. */
+export function clampSegmentDuration(value: number | undefined | null): number {
+  if (!value || !Number.isFinite(value)) return DEFAULT_SEGMENT_DURATION;
+  return Math.max(
+    SEGMENT_MIN_DURATION,
+    Math.min(SEGMENT_MAX_DURATION, Math.round(value)),
+  );
+}
+
+/** Number of shots (Kling tasks) for a tour of the given image count. */
+export function segmentCountFor(imageCount: number): number {
+  return imageCount <= 1 ? 1 : imageCount - 1;
 }
 
 /** Sensible fallback length when the AI does not return one (scales with photo count). */
@@ -88,6 +117,11 @@ export async function analyzeAndOptimizePrompt(params: {
 
   // Enforce strict ordering before anything is sent.
   const ordered = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+  const segmentCount = segmentCountFor(ordered.length);
+  const shotPlan =
+    ordered.length <= 1
+      ? `The final video is a single shot of Image 1.`
+      : `The final video is assembled from ${segmentCount} shots played back-to-back, in order. Shot 1 animates from Image 1 to Image 2, shot 2 from Image 2 to Image 3, and so on — shot k animates from Image k to Image k+1.`;
 
   const content: Array<
     | { type: "text"; text: string }
@@ -98,7 +132,7 @@ export async function analyzeAndOptimizePrompt(params: {
     content.push({ type: "image_url", image_url: { url: img.publicUrl } });
     content.push({
       type: "text",
-      text: `Photo ${img.sequenceIndex + 1} of ${ordered.length}${img.roomTag ? ` — labeled: ${img.roomTag}` : ""}`,
+      text: `Image ${img.sequenceIndex + 1} of ${ordered.length}${img.roomTag ? ` — labeled: ${img.roomTag}` : ""}`,
     });
   }
 
@@ -106,15 +140,17 @@ export async function analyzeAndOptimizePrompt(params: {
     type: "text",
     text: [
       `Analyze these real estate photos as ONE property, in the exact order given (the order is fixed and must not be changed).`,
+      `The photos are numbered Image 1, Image 2, … Image ${ordered.length}. Build the tour strictly in that image order: start with Image 1, then move to Image 2, then continue through the rest (Image 3, Image 4, … up to Image ${ordered.length}) without skipping, dropping, or reordering any image. Every image must appear exactly once, and each scene in your plan must reference its image by number.`,
       `You are the film director. The client chose NO style and NO length — you decide everything creative from what you actually see in each photo.`,
       `First identify what each photo shows (e.g. exterior facade, front yard, aerial/rooftop view, living room, kitchen, bedroom, bathroom, backyard, pool) and then pick the most impressive, appropriate cinematic treatment for EACH one:`,
       `- Exteriors, aerial shots and large outdoor spaces → sweeping drone-style aerial reveals, slow orbits, and rising establishing moves.`,
       `- Interior rooms → smooth first-person walkthrough glides with gentle push-ins and pans; the camera stays inside the room and NEVER passes through an unseen doorway or invents unseen space.`,
       `- Hero details and feature spaces → elegant, slow cinematic push-ins with warm, filmic lighting.`,
       `For each photo choose the single safest, most flattering camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) and note the chosen style.`,
-      `Also decide the IDEAL total video length in whole seconds ("duration"), between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds (the Kling model's maximum is ${MAX_CLIP_DURATION}s). Base it on how many photos there are and how much each scene needs to breathe — enough for smooth, unhurried motion across every photo, but never padded.`,
-      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the photos in order, smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the photos in the given order.`,
-      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"duration":number}`,
+      shotPlan,
+      `For EACH shot, choose its IDEAL length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION} (never longer than ${SEGMENT_MAX_DURATION}s). Give sweeping reveals and richer transitions more time and simple pushes less. Return them in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
+      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the images in order (Image 1 → Image 2 → … → Image ${ordered.length}), smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the images strictly in the given order, starting on Image 1 and ending on Image ${ordered.length}.`,
+      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"segment_durations":number[]}`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -146,7 +182,7 @@ export async function analyzeAndOptimizePrompt(params: {
   let parsed: {
     sequence?: AnalysisResult["sequence"];
     optimized_prompt?: string;
-    duration?: number;
+    segment_durations?: unknown;
   };
   try {
     parsed = JSON.parse(jsonText);
@@ -158,16 +194,23 @@ export async function analyzeAndOptimizePrompt(params: {
   const optimizedPrompt =
     parsed.optimized_prompt?.trim() || buildFallbackPrompt(ordered.length);
 
-  // AI-decided length, clamped to the valid Kling range; fall back to a
-  // photo-count-based default if the model omitted or fumbled it.
-  const duration =
-    typeof parsed.duration === "number"
-      ? clampDuration(parsed.duration)
-      : defaultDurationFor(ordered.length);
+  // AI-chosen per-shot lengths. Always produce exactly `segmentCount` values,
+  // each clamped to [SEGMENT_MIN,SEGMENT_MAX]; any missing/invalid entry falls
+  // back to the default so a fumbled response never blocks paid generation.
+  const rawDurations = Array.isArray(parsed.segment_durations)
+    ? (parsed.segment_durations as unknown[])
+    : [];
+  const segmentDurations = Array.from({ length: segmentCount }, (_, i) =>
+    clampSegmentDuration(
+      typeof rawDurations[i] === "number" ? (rawDurations[i] as number) : undefined,
+    ),
+  );
+  const duration = segmentDurations.reduce((sum, value) => sum + value, 0);
 
   return {
     sequence: parsed.sequence ?? [],
     optimizedPrompt,
+    segmentDurations,
     duration,
   };
 }

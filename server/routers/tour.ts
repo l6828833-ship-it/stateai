@@ -11,22 +11,24 @@ import {
   analyzeAndOptimizePrompt,
   assertInworldConfigured,
   buildFallbackPrompt,
+  clampSegmentDuration,
   defaultDurationFor,
 } from "../inworld";
 import {
   assertKlingConfigured,
   decodeKlingProviderTaskId,
   downloadKlingVideo,
-  encodeKlingProviderTaskId,
-  findKlingTaskByExternalId,
   isVideoAspectRatio,
   KlingAmbiguousSubmissionError,
-  klingExternalTaskIdForJob,
+  klingSegmentExternalTaskId,
   OUTPUT_RESOLUTION,
+  planKlingSegments,
   pollKlingJob,
+  pollKlingSegments,
   submitKlingVideo,
   type OrderedImage,
 } from "../kling";
+import { concatMp4Segments } from "../video";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import {
   getStripeGenerationEntitlement,
@@ -247,6 +249,82 @@ async function toClientJobWithMedia(job: GenerationJob, includeVideo: boolean) {
     includeVideo ? signStoredMediaUrl(safe.videoUrl) : Promise.resolve(null),
   ]);
   return { ...safe, thumbnailUrl, videoUrl };
+}
+
+/**
+ * Safety net for stranded jobs. If a segment submission was ambiguous AND Kling
+ * never actually accepted it, that segment stays unknown forever, so the job
+ * would never reach ready or failed on its own — silently holding a plan
+ * allowance slot. Kling tasks finish in minutes (and segments run in parallel),
+ * so a generous ceiling fails a truly stuck job to free the slot without
+ * cutting off a legitimately slow generation.
+ */
+const MAX_PROCESSING_AGE_MS = 45 * 60 * 1000;
+
+/** Recover how many images a job was reserved with, from its stored sequence. */
+function imageCountFromSequence(imageSequence: string | null): number {
+  if (!imageSequence) return 0;
+  try {
+    const parsed = JSON.parse(imageSequence) as unknown;
+    if (Array.isArray(parsed)) return parsed.length;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      Array.isArray((parsed as { imageIds?: unknown }).imageIds)
+    ) {
+      return (parsed as { imageIds: unknown[] }).imageIds.length;
+    }
+  } catch {
+    // Fall through to 0 — caller keeps the job processing rather than guessing.
+  }
+  return 0;
+}
+
+/**
+ * Poll + archive a legacy single-task job (created before multi-segment). It
+ * polls one Kling task and, on success, downloads and archives its single MP4.
+ * Mutates the job row; the caller re-reads and serializes it.
+ */
+async function pollLegacySingleTaskJob(
+  userId: number,
+  jobId: number,
+  klingTaskId: string,
+): Promise<void> {
+  let poll: Awaited<ReturnType<typeof pollKlingJob>>;
+  try {
+    poll = await pollKlingJob(klingTaskId);
+  } catch (error) {
+    console.warn("[Generation] Kling poll error", { jobId, error });
+    return;
+  }
+
+  if (poll.status === "completed") {
+    try {
+      if (!poll.videoUrl) {
+        throw new Error("Kling completed without a downloadable output URL");
+      }
+      const videoBuffer = await downloadKlingVideo(poll.videoUrl);
+      const { key, url } = await storagePut(
+        `user-${userId}/videos/job-${jobId}.mp4`,
+        videoBuffer,
+        "video/mp4",
+      );
+      await db.updateGenerationJob(jobId, { status: "ready", videoKey: key, videoUrl: url });
+    } catch (error) {
+      console.error("[Generation] Archival error for job", jobId, error);
+      await db.updateGenerationJob(jobId, {
+        status: "failed",
+        errorMessage:
+          "Your video was generated but could not be saved. Please try again or contact support.",
+      });
+    }
+  } else if (poll.status === "failed") {
+    console.error("[Generation] Kling job failed", { jobId, providerError: poll.error });
+    await db.updateGenerationJob(jobId, {
+      status: "failed",
+      errorMessage: "Video generation failed. Please try again or contact support.",
+    });
+  }
 }
 
 /** Build public HTTPS URLs for stored images so external APIs can fetch them. */
@@ -561,52 +639,66 @@ export const tourRouter = router({
         // movement, the optimized prompt AND the ideal clip length. Failure
         // falls back to a solid template rather than blocking paid generation.
         let optimizedPrompt: string;
-        let duration: number;
+        let segmentDurations: number[];
         try {
           const analysis = await analyzeAndOptimizePrompt({ images: orderedPublic });
           optimizedPrompt = analysis.optimizedPrompt;
-          duration = analysis.duration;
+          segmentDurations = analysis.segmentDurations;
         } catch (e) {
           console.warn("[Generation] Prompt optimization failed, using fallback:", e);
           optimizedPrompt = buildFallbackPrompt(sorted.length);
-          duration = defaultDurationFor(sorted.length);
+          segmentDurations = []; // per-segment default applied below
         }
 
-        // Persist the analysis first so it survives even if the submission
-        // response is lost and the task is later reconciled by external id.
+        // Split the tour into first/last-frame segments so EVERY uploaded
+        // image is a real frame in the final video (Kling accepts only a first
+        // and optional last frame per task). Segments are polled and stitched
+        // back together later. One image → one single-frame segment.
+        const segments = planKlingSegments(orderedPublic);
+        // The AI picks each shot's length (capped at 6s); clamp defensively and
+        // fall back to the default for any shot the model omitted.
+        const durations = segments.map((segment) =>
+          clampSegmentDuration(segmentDurations[segment.index]),
+        );
+        const totalDuration = durations.reduce((sum, value) => sum + value, 0);
+
+        // Persist the analysis and total length first so they survive even if a
+        // submission response is lost; segments are reconciled by their
+        // deterministic external ids on poll.
         await db.updateGenerationJob(job.id, {
           optimizedPrompt,
-          clipDuration: duration,
+          clipDuration: totalDuration,
         });
 
-        let submission: Awaited<ReturnType<typeof submitKlingVideo>>;
-        try {
-          submission = await submitKlingVideo({
-            prompt: optimizedPrompt,
-            images: orderedPublic,
-            duration,
-            aspectRatio,
-            externalTaskId: klingExternalTaskIdForJob(job.id),
-          });
-        } catch (submissionError) {
-          if (submissionError instanceof KlingAmbiguousSubmissionError) {
-            // The task may already be accepted by Kling. Keep the job
-            // processing (no stored task id yet) so pollJob reconciles it by
-            // its unique external id. Never fail it here — that would let an
-            // included-plan retry submit a second paid task, and it would
-            // wrongly consume a paid add-on entitlement.
-            console.warn("[Generation] Ambiguous Kling submission; awaiting reconciliation", {
-              jobId: job.id,
+        // Submit each segment once. The external id is deterministic per
+        // (job, segment), so a lost response is recovered on poll rather than
+        // re-POSTed. A definitive rejection fails the whole job; an ambiguous
+        // (network) outcome is tolerated so we neither double-submit nor
+        // wrongly consume a paid add-on entitlement.
+        let sawAmbiguousSegment = false;
+        for (const segment of segments) {
+          try {
+            await submitKlingVideo({
+              prompt: optimizedPrompt,
+              images: segment.images,
+              duration: durations[segment.index],
+              aspectRatio,
+              externalTaskId: klingSegmentExternalTaskId(job.id, segment.index),
             });
-            const pending = await db.getGenerationJob(job.id, ctx.user.id);
-            return toClientJobWithMedia(pending!, false);
+          } catch (segmentError) {
+            if (segmentError instanceof KlingAmbiguousSubmissionError) {
+              sawAmbiguousSegment = true;
+              continue;
+            }
+            throw segmentError;
           }
-          throw submissionError;
         }
-
-        await db.updateGenerationJob(job.id, {
-          providerTaskId: encodeKlingProviderTaskId(submission.taskId),
-        });
+        if (sawAmbiguousSegment) {
+          console.warn(
+            "[Generation] One or more Kling segment submissions were ambiguous; pollJob will reconcile by external id",
+            { jobId: job.id },
+          );
+        }
 
         const fresh = await db.getGenerationJob(job.id, ctx.user.id);
         return toClientJobWithMedia(fresh!, false);
@@ -628,9 +720,14 @@ export const tourRouter = router({
     }),
 
   /**
-   * Poll an official Kling task. A processing row without a stored task id is
-   * reconciled by its unique external id, covering a crash or lost response
-   * between provider acceptance and the database update.
+   * Poll a generation job.
+   *
+   * - Legacy single-task jobs (a Kling task id stored in providerTaskId) keep
+   *   the original single-clip path.
+   * - Multi-segment jobs reconcile every consecutive-pair segment by its
+   *   deterministic external id in one batch query. When ALL segments have
+   *   succeeded, their videos are downloaded in order, concatenated into one
+   *   MP4, and archived. A single failed segment fails the whole job.
    */
   pollJob: protectedProcedure
     .input(z.object({ jobId: z.number() }))
@@ -642,74 +739,101 @@ export const tourRouter = router({
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      let klingTaskId = decodeKlingProviderTaskId(job.providerTaskId);
-
-      // No official task id stored yet (e.g. the submission response was lost).
-      // Reconcile by the job's unique external id instead of resubmitting.
-      if (!klingTaskId) {
-        try {
-          const recovered = await findKlingTaskByExternalId(
-            klingExternalTaskIdForJob(job.id),
-          );
-          if (!recovered) return toClientJobWithMedia(job, includeVideo);
-          klingTaskId = recovered.taskId;
-          await db.updateGenerationJob(job.id, {
-            providerTaskId: encodeKlingProviderTaskId(klingTaskId),
-          });
-        } catch (error) {
-          // The task may not be visible immediately after submission. Keep the
-          // reservation processing and reconcile it on the next client poll.
-          console.warn("[Generation] Kling task reconciliation failed", {
-            jobId: job.id,
-            error,
-          });
-          return toClientJobWithMedia(job, includeVideo);
-        }
+      // Fail a job that has been processing implausibly long (e.g. an ambiguous
+      // submission Kling never actually accepted) so it stops holding a plan
+      // allowance slot. Failed jobs are excluded from the allowance count.
+      if (Date.now() - job.createdAt.getTime() > MAX_PROCESSING_AGE_MS) {
+        console.error("[Generation] Job exceeded max processing age; failing to free allowance", {
+          jobId: job.id,
+        });
+        await db.updateGenerationJob(job.id, {
+          status: "failed",
+          errorMessage: "Video generation timed out. Please try again or contact support.",
+        });
+        const timedOut = await db.getGenerationJob(job.id, ctx.user.id);
+        return toClientJobWithMedia(timedOut!, includeVideo);
       }
 
-      let poll: Awaited<ReturnType<typeof pollKlingJob>>;
+      // Backward compatibility: jobs created by the earlier single-task flow.
+      const legacyTaskId = decodeKlingProviderTaskId(job.providerTaskId);
+      if (legacyTaskId) {
+        await pollLegacySingleTaskJob(ctx.user.id, job.id, legacyTaskId);
+        const refreshed = await db.getGenerationJob(job.id, ctx.user.id);
+        return toClientJobWithMedia(refreshed!, includeVideo);
+      }
+
+      const imageCount = imageCountFromSequence(job.imageSequence);
+      if (imageCount === 0) {
+        // Cannot determine the segment plan yet; never guess (that could
+        // archive a truncated video). Keep processing and retry next poll.
+        return toClientJobWithMedia(job, includeVideo);
+      }
+      const segmentCount = Math.max(1, imageCount - 1);
+      const externalIds = Array.from({ length: segmentCount }, (_, i) =>
+        klingSegmentExternalTaskId(job.id, i),
+      );
+
+      let segments: Awaited<ReturnType<typeof pollKlingSegments>>;
       try {
-        poll = await pollKlingJob(klingTaskId);
+        segments = await pollKlingSegments(externalIds);
       } catch (error) {
-        // Upstream polling failures are usually transient; keep processing.
-        console.warn("[Generation] Kling poll error", { jobId: job.id, error });
+        console.warn("[Generation] Kling segment poll error", { jobId: job.id, error });
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      if (poll.status === "completed") {
-        try {
-          if (!poll.videoUrl) {
-            throw new Error("Kling completed without a downloadable output URL");
-          }
-          const videoBuffer = await downloadKlingVideo(poll.videoUrl);
-          const { key, url } = await storagePut(
-            `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
-            videoBuffer,
-            "video/mp4",
-          );
-          await db.updateGenerationJob(job.id, {
-            status: "ready",
-            videoKey: key,
-            videoUrl: url,
-          });
-        } catch (error) {
-          // A completed generation that cannot be archived should stop polling;
-          // otherwise every five-second poll downloads and uploads it again.
-          console.error("[Generation] Archival error for job", job.id, error);
-          await db.updateGenerationJob(job.id, {
-            status: "failed",
-            errorMessage:
-              "Your video was generated but could not be saved. Please try again or contact support.",
-          });
-        }
-      } else if (poll.status === "failed") {
-        console.error("[Generation] Kling job failed", {
+      if (segments.some((segment) => segment.status === "failed")) {
+        console.error("[Generation] A Kling segment failed", {
           jobId: job.id,
-          providerError: poll.error,
+          errors: segments
+            .filter((segment) => segment.status === "failed")
+            .map((segment) => segment.error),
         });
         await db.updateGenerationJob(job.id, {
           status: "failed",
           errorMessage: "Video generation failed. Please try again or contact support.",
+        });
+        const failed = await db.getGenerationJob(job.id, ctx.user.id);
+        return toClientJobWithMedia(failed!, includeVideo);
+      }
+
+      const allReady = segments.every(
+        (segment) => segment.found && segment.status === "completed" && segment.videoUrl,
+      );
+      if (!allReady) {
+        return toClientJobWithMedia(job, includeVideo); // keep processing
+      }
+
+      try {
+        // Download every segment in order, then stitch into one continuous MP4.
+        const buffers: Buffer[] = [];
+        for (const segment of segments) {
+          buffers.push(await downloadKlingVideo(segment.videoUrl!));
+        }
+        const finalVideo =
+          buffers.length === 1
+            ? buffers[0]
+            : await concatMp4Segments(buffers, job.aspectRatio);
+        const { key, url } = await storagePut(
+          `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
+          finalVideo,
+          "video/mp4",
+        );
+        await db.updateGenerationJob(job.id, {
+          status: "ready",
+          videoKey: key,
+          videoUrl: url,
+        });
+      } catch (error) {
+        // A generation that cannot be assembled/archived should stop polling;
+        // otherwise every five-second poll re-downloads and re-encodes it.
+        console.error("[Generation] Segment assembly/archival error", {
+          jobId: job.id,
+          error,
+        });
+        await db.updateGenerationJob(job.id, {
+          status: "failed",
+          errorMessage:
+            "Your video was generated but could not be assembled. Please try again or contact support.",
         });
       }
 

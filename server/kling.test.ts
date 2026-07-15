@@ -5,6 +5,8 @@ import {
   encodeKlingProviderTaskId,
   KlingAmbiguousSubmissionError,
   klingExternalTaskIdForJob,
+  klingSegmentExternalTaskId,
+  planKlingSegments,
   verifyKlingKey,
 } from "./kling";
 import { buildFallbackPrompt } from "./inworld";
@@ -117,6 +119,58 @@ describe("official Kling 3.0 request contract", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("KlingAmbiguousSubmissionError");
     expect(error.externalTaskId).toBe("estatetour-generation-7");
+  });
+});
+
+describe("multi-image segment planning", () => {
+  it("creates one single-frame segment for a single image", () => {
+    const segments = planKlingSegments(orderedImages.slice(0, 1));
+    expect(segments).toHaveLength(1);
+    expect(segments[0].index).toBe(0);
+    expect(segments[0].images.map((i) => i.publicUrl)).toEqual([
+      orderedImages[0].publicUrl,
+    ]);
+  });
+
+  it("chains consecutive image pairs so every image is a real frame", () => {
+    const segments = planKlingSegments(orderedImages); // 3 images
+    expect(segments).toHaveLength(2); // N-1 segments
+    // Segment 0: image 0 -> image 1
+    expect(segments[0].images.map((i) => i.publicUrl)).toEqual([
+      orderedImages[0].publicUrl,
+      orderedImages[1].publicUrl,
+    ]);
+    // Segment 1: image 1 -> image 2 (image 1 is shared, guaranteeing continuity)
+    expect(segments[1].images.map((i) => i.publicUrl)).toEqual([
+      orderedImages[1].publicUrl,
+      orderedImages[2].publicUrl,
+    ]);
+    // Each segment's frames are re-based to gapless 0/1 for the Kling contract.
+    expect(segments[1].images.map((i) => i.sequenceIndex)).toEqual([0, 1]);
+  });
+
+  it("builds a valid two-frame Kling request from a planned segment", () => {
+    const [firstSegment] = planKlingSegments(orderedImages);
+    const request = buildKlingImageToVideoRequest({
+      prompt: "Cinematic transition between rooms.",
+      images: firstSegment.images,
+      duration: 5,
+      aspectRatio: "16:9",
+      externalTaskId: klingSegmentExternalTaskId(42, firstSegment.index),
+    });
+    expect(request.contents.map((c) => c.type)).toEqual([
+      "prompt",
+      "first_frame",
+      "last_frame",
+    ]);
+    expect(request.options.external_task_id).toBe("estatetour-generation-42-seg-0");
+  });
+
+  it("derives deterministic, unique segment external ids", () => {
+    expect(klingSegmentExternalTaskId(7, 0)).toBe("estatetour-generation-7-seg-0");
+    expect(klingSegmentExternalTaskId(7, 3)).toBe("estatetour-generation-7-seg-3");
+    expect(() => klingSegmentExternalTaskId(7, -1)).toThrow();
+    expect(() => klingSegmentExternalTaskId(0, 0)).toThrow();
   });
 });
 
