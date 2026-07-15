@@ -27,11 +27,6 @@ import {
   submitKlingVideo,
   type OrderedImage,
 } from "../kling";
-import {
-  downloadLegacyOpenRouterVideo,
-  hasLegacyOpenRouterKey,
-  pollLegacyOpenRouterJob,
-} from "../openrouter";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import {
   getStripeGenerationEntitlement,
@@ -635,8 +630,7 @@ export const tourRouter = router({
   /**
    * Poll an official Kling task. A processing row without a stored task id is
    * reconciled by its unique external id, covering a crash or lost response
-   * between provider acceptance and the database update. Unprefixed ids are
-   * legacy OpenRouter tasks and can drain while the old key remains configured.
+   * between provider acceptance and the database update.
    */
   pollJob: protectedProcedure
     .input(z.object({ jobId: z.number() }))
@@ -648,18 +642,20 @@ export const tourRouter = router({
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      let storedTaskId = job.providerTaskId;
-      let klingTaskId = decodeKlingProviderTaskId(storedTaskId);
+      let klingTaskId = decodeKlingProviderTaskId(job.providerTaskId);
 
-      if (!storedTaskId) {
+      // No official task id stored yet (e.g. the submission response was lost).
+      // Reconcile by the job's unique external id instead of resubmitting.
+      if (!klingTaskId) {
         try {
           const recovered = await findKlingTaskByExternalId(
             klingExternalTaskIdForJob(job.id),
           );
           if (!recovered) return toClientJobWithMedia(job, includeVideo);
-          storedTaskId = encodeKlingProviderTaskId(recovered.taskId);
           klingTaskId = recovered.taskId;
-          await db.updateGenerationJob(job.id, { providerTaskId: storedTaskId });
+          await db.updateGenerationJob(job.id, {
+            providerTaskId: encodeKlingProviderTaskId(klingTaskId),
+          });
         } catch (error) {
           // The task may not be visible immediately after submission. Keep the
           // reservation processing and reconcile it on the next client poll.
@@ -671,43 +667,21 @@ export const tourRouter = router({
         }
       }
 
-      const provider = klingTaskId ? "kling" : "openrouter-legacy";
-      const providerTaskId = klingTaskId ?? storedTaskId;
-      if (!providerTaskId) return toClientJobWithMedia(job, includeVideo);
-      if (provider === "openrouter-legacy" && !hasLegacyOpenRouterKey()) {
-        console.error("[Generation] Legacy OpenRouter job cannot be polled without its key", {
-          jobId: job.id,
-        });
-        return toClientJobWithMedia(job, includeVideo);
-      }
-
-      let poll: {
-        status: string;
-        videoUrl: string | null;
-        error: string | null;
-      };
+      let poll: Awaited<ReturnType<typeof pollKlingJob>>;
       try {
-        poll = klingTaskId
-          ? await pollKlingJob(klingTaskId)
-          : await pollLegacyOpenRouterJob(providerTaskId);
+        poll = await pollKlingJob(klingTaskId);
       } catch (error) {
         // Upstream polling failures are usually transient; keep processing.
-        console.warn("[Generation] Provider poll error", {
-          jobId: job.id,
-          provider,
-          error,
-        });
+        console.warn("[Generation] Kling poll error", { jobId: job.id, error });
         return toClientJobWithMedia(job, includeVideo);
       }
 
       if (poll.status === "completed") {
         try {
-          if (!poll.videoUrl && klingTaskId) {
+          if (!poll.videoUrl) {
             throw new Error("Kling completed without a downloadable output URL");
           }
-          const videoBuffer = klingTaskId
-            ? await downloadKlingVideo(poll.videoUrl!)
-            : await downloadLegacyOpenRouterVideo(providerTaskId, poll.videoUrl);
+          const videoBuffer = await downloadKlingVideo(poll.videoUrl);
           const { key, url } = await storagePut(
             `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
             videoBuffer,
@@ -728,16 +702,14 @@ export const tourRouter = router({
               "Your video was generated but could not be saved. Please try again or contact support.",
           });
         }
-      } else if (["failed", "cancelled", "expired"].includes(poll.status)) {
-        console.error("[Generation] Provider job ended", {
+      } else if (poll.status === "failed") {
+        console.error("[Generation] Kling job failed", {
           jobId: job.id,
-          provider,
-          status: poll.status,
           providerError: poll.error,
         });
         await db.updateGenerationJob(job.id, {
           status: "failed",
-          errorMessage: `Video generation ${poll.status}. Please try again or contact support.`,
+          errorMessage: "Video generation failed. Please try again or contact support.",
         });
       }
 

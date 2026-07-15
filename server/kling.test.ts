@@ -100,11 +100,12 @@ describe("official Kling 3.0 request contract", () => {
     ).toThrow("3 to 15");
   });
 
-  it("encodes official task ids without confusing legacy OpenRouter jobs", () => {
+  it("encodes and decodes official Kling task ids with an explicit prefix", () => {
     const stored = encodeKlingProviderTaskId("893605946402811985");
     expect(stored).toBe("kling:893605946402811985");
     expect(decodeKlingProviderTaskId(stored)).toBe("893605946402811985");
-    expect(decodeKlingProviderTaskId("vg_legacy_openrouter_id")).toBeNull();
+    expect(decodeKlingProviderTaskId("unprefixed-id")).toBeNull();
+    expect(decodeKlingProviderTaskId(null)).toBeNull();
     expect(klingExternalTaskIdForJob(42)).toBe("estatetour-generation-42");
   });
 
