@@ -5,6 +5,12 @@ export const ENV = {
   appId: process.env.VITE_APP_ID || "estatetour-ai",
   cookieSecret: process.env.JWT_SECRET ?? "",
   databaseUrl: process.env.DATABASE_URL ?? "",
+  // Supabase Postgres and Storage use separate endpoints/credentials. Never
+  // expose the service-role key to Vite/client code.
+  supabaseUrl: process.env.SUPABASE_URL ?? "",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+  supabaseStorageBucket:
+    process.env.SUPABASE_STORAGE_BUCKET || "property-media",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
   isProduction: process.env.NODE_ENV === "production",

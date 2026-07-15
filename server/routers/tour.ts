@@ -19,7 +19,7 @@ import {
   submitSeedanceVideo,
   type OrderedImage,
 } from "../openrouter";
-import { storagePut } from "../storage";
+import { storageGetSignedUrl, storagePut } from "../storage";
 import { protectedProcedure, router } from "../_core/trpc";
 
 const PNG_SIGNATURE = Buffer.from([
@@ -163,16 +163,51 @@ function hasValidImageStructure(buffer: Buffer, mimeType: string): boolean {
 }
 
 /** Strip server-only fields before returning a job to the client. */
-export function toClientJob(job: NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>) {
-  const { optimizedPrompt, openrouterJobId, ...safe } = job;
+type GenerationJob = NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>;
+
+export function toClientJob(job: GenerationJob) {
+  const { optimizedPrompt, openrouterJobId, videoKey, ...safe } = job;
   return safe;
+}
+
+/** Convert stable storage paths into short-lived URLs for native media elements. */
+async function signStoredMediaUrl(url: string | null): Promise<string | null> {
+  if (!url?.startsWith("/manus-storage/")) return url;
+
+  const encodedKey = url.slice("/manus-storage/".length).split(/[?#]/, 1)[0];
+  if (!encodedKey) return url;
+
+  let key: string;
+  try {
+    key = decodeURIComponent(encodedKey);
+  } catch {
+    console.warn("[Storage] Could not decode media path for signing");
+    return url;
+  }
+
+  try {
+    return await storageGetSignedUrl(key);
+  } catch (error) {
+    // Keep the compatibility URL so one missing legacy object does not make
+    // the entire project or history query fail.
+    console.error("[Storage] Could not sign client media URL", error);
+    return url;
+  }
+}
+
+async function toClientJobWithMedia(job: GenerationJob, includeVideo: boolean) {
+  const safe = toClientJob(job);
+  const [thumbnailUrl, videoUrl] = await Promise.all([
+    signStoredMediaUrl(safe.thumbnailUrl),
+    includeVideo ? signStoredMediaUrl(safe.videoUrl) : Promise.resolve(null),
+  ]);
+  return { ...safe, thumbnailUrl, videoUrl };
 }
 
 /** Build public HTTPS URLs for stored images so external APIs can fetch them. */
 async function toPublicOrderedImages(
   images: Array<{ sequenceIndex: number; fileKey: string; roomTag: string | null }>,
 ): Promise<OrderedImage[]> {
-  const { storageGetSignedUrl } = await import("../storage");
   return Promise.all(
     images.map(async (img) => ({
       sequenceIndex: img.sequenceIndex,
@@ -187,11 +222,17 @@ export const tourRouter = router({
   getState: protectedProcedure.query(async ({ ctx }) => {
     const project = await db.getOrCreateActiveProject(ctx.user.id);
     const images = await db.getProjectImages(project.id, ctx.user.id);
+    const clientImages = await Promise.all(
+      images.map(async (image) => ({
+        ...image,
+        url: (await signStoredMediaUrl(image.url)) ?? image.url,
+      })),
+    );
     const subscribed = await db.hasActiveSubscription(ctx.user.id);
     const subscription = await db.getSubscription(ctx.user.id);
     return {
       project,
-      images,
+      images: clientImages,
       subscribed,
       plan: subscription?.plan ?? null,
     };
@@ -265,7 +306,7 @@ export const tourRouter = router({
 
       const ext = input.mimeType === "image/png" ? "png" : input.mimeType === "image/webp" ? "webp" : "jpg";
       const nextIndex = (await db.getMaxSequenceIndex(project.id, ctx.user.id)) + 1;
-      // Sequence index is embedded in the S3 key as metadata for traceability.
+      // Sequence index is embedded in the object key for traceability.
       const relKey = `user-${ctx.user.id}/project-${project.id}/seq-${String(nextIndex).padStart(3, "0")}.${ext}`;
       const { key, url } = await storagePut(relKey, buffer, input.mimeType);
 
@@ -279,7 +320,10 @@ export const tourRouter = router({
         mimeType: input.mimeType,
         roomTag: input.roomTag ?? null,
       });
-      return image;
+      return {
+        ...image,
+        url: (await signStoredMediaUrl(image.url)) ?? image.url,
+      };
     }),
 
   /** Reorder: array index = new sequenceIndex. Set must match exactly. */
@@ -396,7 +440,7 @@ export const tourRouter = router({
         });
 
         const fresh = await db.getGenerationJob(job.id, ctx.user.id);
-        return toClientJob(fresh!);
+        return toClientJobWithMedia(fresh!, false);
       } catch (e) {
         const message = e instanceof Error ? e.message : "Video generation failed";
         await db.updateGenerationJob(job.id, { status: "failed", errorMessage: message });
@@ -413,37 +457,61 @@ export const tourRouter = router({
     .query(async ({ ctx, input }) => {
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
       if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
-      if (job.status !== "processing" || !job.openrouterJobId) return toClientJob(job);
+      const includeVideo = await db.hasActiveSubscription(ctx.user.id);
+      if (job.status !== "processing" || !job.openrouterJobId) {
+        return toClientJobWithMedia(job, includeVideo);
+      }
 
+      let poll: Awaited<ReturnType<typeof pollSeedanceJob>>;
       try {
-        const poll = await pollSeedanceJob(job.openrouterJobId);
-        if (poll.status === "completed") {
+        poll = await pollSeedanceJob(job.openrouterJobId);
+      } catch (error) {
+        // Upstream polling failures are usually transient; keep processing.
+        console.warn("[Generation] Poll error for job", job.id, error);
+        return toClientJobWithMedia(job, includeVideo);
+      }
+
+      if (poll.status === "completed") {
+        try {
           const videoBuffer = await downloadSeedanceVideo(job.openrouterJobId, poll.videoUrl);
           const { key, url } = await storagePut(
             `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
             videoBuffer,
             "video/mp4",
           );
-          await db.updateGenerationJob(job.id, { status: "ready", videoKey: key, videoUrl: url });
-        } else if (["failed", "cancelled", "expired"].includes(poll.status)) {
+          await db.updateGenerationJob(job.id, {
+            status: "ready",
+            videoKey: key,
+            videoUrl: url,
+          });
+        } catch (error) {
+          // A completed generation that cannot be archived should stop polling;
+          // otherwise every 5-second poll downloads and uploads it again.
+          console.error("[Generation] Archival error for job", job.id, error);
           await db.updateGenerationJob(job.id, {
             status: "failed",
-            errorMessage: poll.error ?? `Generation ${poll.status}`,
+            errorMessage:
+              "Your video was generated but could not be saved. Please try again or contact support.",
           });
         }
-      } catch (e) {
-        // Transient poll errors keep the job in "processing"; log only.
-        console.warn("[Generation] Poll error for job", job.id, e);
+      } else if (["failed", "cancelled", "expired"].includes(poll.status)) {
+        await db.updateGenerationJob(job.id, {
+          status: "failed",
+          errorMessage: poll.error ?? `Generation ${poll.status}`,
+        });
       }
 
       const fresh = await db.getGenerationJob(job.id, ctx.user.id);
-      return toClientJob(fresh!);
+      return toClientJobWithMedia(fresh!, includeVideo);
     }),
 
   /** All of the user's jobs, newest first (history view). */
   listJobs: protectedProcedure.query(async ({ ctx }) => {
-    const jobs = await db.listGenerationJobs(ctx.user.id);
-    return jobs.map(toClientJob);
+    const [jobs, subscribed] = await Promise.all([
+      db.listGenerationJobs(ctx.user.id),
+      db.hasActiveSubscription(ctx.user.id),
+    ]);
+    return Promise.all(jobs.map((job) => toClientJobWithMedia(job, subscribed)));
   }),
 
   /** Signed download URL for a ready video — subscription required. */
@@ -461,7 +529,6 @@ export const tourRouter = router({
       if (!job || job.status !== "ready" || !job.videoKey) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Video not ready" });
       }
-      const { storageGetSignedUrl } = await import("../storage");
       const url = await storageGetSignedUrl(job.videoKey);
       return { url };
     }),

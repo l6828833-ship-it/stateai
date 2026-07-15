@@ -1,24 +1,63 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uploads via Forge Server presigned URL to S3 (PUT direct).
-// Downloads return /manus-storage/{key} paths served via 307 redirect.
+// Supabase Storage helpers (server-side only).
+// Uploads use the private Storage REST API with the service-role key.
+// Browser-facing URLs remain /manus-storage/{key} for compatibility and are
+// resolved to short-lived Supabase signed URLs by storageProxy.ts.
 
 import { ENV } from "./_core/env";
 
-function getForgeConfig() {
-  const forgeUrl = ENV.forgeApiUrl;
-  const forgeKey = ENV.forgeApiKey;
+const DEFAULT_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
-  if (!forgeUrl || !forgeKey) {
+function getSupabaseStorageConfig() {
+  const configuredUrl = ENV.supabaseUrl.trim();
+  const serviceRoleKey = ENV.supabaseServiceRoleKey.trim();
+  const bucket = ENV.supabaseStorageBucket.trim();
+
+  if (!configuredUrl || !serviceRoleKey) {
     throw new Error(
-      "Storage config missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY",
+      "Supabase Storage config missing: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+    );
+  }
+  if (!bucket) {
+    throw new Error(
+      "Supabase Storage config missing: set SUPABASE_STORAGE_BUCKET"
     );
   }
 
-  return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(configuredUrl);
+  } catch {
+    throw new Error(
+      "SUPABASE_URL must be a valid URL such as https://your-project.supabase.co"
+    );
+  }
+  const isLocal =
+    parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1";
+  if (parsedUrl.protocol !== "https:" && !isLocal) {
+    throw new Error("SUPABASE_URL must use HTTPS");
+  }
+
+  return { supabaseUrl: parsedUrl.origin, serviceRoleKey, bucket };
 }
 
 function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
+  const key = relKey.replace(/^\/+/, "");
+  if (
+    !key ||
+    key
+      .split("/")
+      .some(segment => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("Invalid storage key");
+  }
+  return key;
+}
+
+function encodePath(value: string): string {
+  return value
+    .split("/")
+    .map(segment => encodeURIComponent(segment))
+    .join("/");
 }
 
 function appendHashSuffix(relKey: string): string {
@@ -28,70 +67,117 @@ function appendHashSuffix(relKey: string): string {
   return `${relKey.slice(0, lastDot)}_${hash}${relKey.slice(lastDot)}`;
 }
 
+function storageHeaders(serviceRoleKey: string): Record<string, string> {
+  return {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+  };
+}
+
+async function readSupabaseError(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  if (!body) return response.statusText;
+  try {
+    const parsed = JSON.parse(body) as { message?: string; error?: string };
+    return parsed.message || parsed.error || body;
+  } catch {
+    return body;
+  }
+}
+
+function storageError(
+  operation: string,
+  status: number,
+  detail: string,
+  bucket: string
+): Error {
+  console.error(
+    `[SupabaseStorage] ${operation} failed (${status}) in bucket "${bucket}": ${detail}`
+  );
+  if (/bucket.*not found|not found.*bucket/i.test(detail)) {
+    return new Error(
+      "Storage is not configured correctly. Create the configured private bucket or update SUPABASE_STORAGE_BUCKET"
+    );
+  }
+  if (status === 401 || status === 403) {
+    return new Error(
+      "Storage authentication failed. Check the server-only Supabase Storage configuration"
+    );
+  }
+  return new Error(`Storage ${operation} failed. Please try again`);
+}
+
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream",
+  contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const { supabaseUrl, serviceRoleKey, bucket } = getSupabaseStorageConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
-
-  // 1. Get presigned PUT URL from Forge
-  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
-  presignUrl.searchParams.set("path", key);
-
-  const presignResp = await fetch(presignUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-
-  if (!presignResp.ok) {
-    const msg = await presignResp.text().catch(() => presignResp.statusText);
-    throw new Error(`Storage presign failed (${presignResp.status}): ${msg}`);
-  }
-
-  const { url: s3Url } = (await presignResp.json()) as { url: string };
-  if (!s3Url) throw new Error("Forge returned empty presign URL");
-
-  // 2. PUT file directly to S3
+  const objectUrl = `${supabaseUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodePath(key)}`;
   const blob =
     typeof data === "string"
       ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
+      : new Blob([data as BlobPart], { type: contentType });
 
-  const uploadResp = await fetch(s3Url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
+  const response = await fetch(objectUrl, {
+    method: "POST",
+    headers: {
+      ...storageHeaders(serviceRoleKey),
+      "Content-Type": contentType,
+      "x-upsert": "false",
+    },
     body: blob,
   });
 
-  if (!uploadResp.ok) {
-    throw new Error(`Storage upload to S3 failed (${uploadResp.status})`);
+  if (!response.ok) {
+    const detail = await readSupabaseError(response);
+    throw storageError("upload", response.status, detail, bucket);
   }
 
-  return { key, url: `/manus-storage/${key}` };
+  return { key, url: `/manus-storage/${encodePath(key)}` };
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+export async function storageGet(
+  relKey: string
+): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
-  return { key, url: `/manus-storage/${key}` };
+  return { key, url: `/manus-storage/${encodePath(key)}` };
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const { supabaseUrl, serviceRoleKey, bucket } = getSupabaseStorageConfig();
   const key = normalizeKey(relKey);
+  const signUrl = `${supabaseUrl}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${encodePath(key)}`;
 
-  const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
-  getUrl.searchParams.set("path", key);
-
-  const resp = await fetch(getUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
+  const response = await fetch(signUrl, {
+    method: "POST",
+    headers: {
+      ...storageHeaders(serviceRoleKey),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expiresIn: DEFAULT_SIGNED_URL_TTL_SECONDS }),
   });
 
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Storage signed URL failed (${resp.status}): ${msg}`);
+  if (!response.ok) {
+    const detail = await readSupabaseError(response);
+    throw storageError("signed URL", response.status, detail, bucket);
   }
 
-  const { url } = (await resp.json()) as { url: string };
-  return url;
+  const result = (await response.json()) as {
+    signedURL?: string;
+    signedUrl?: string;
+  };
+  const signedUrl = result.signedURL ?? result.signedUrl;
+  if (!signedUrl)
+    throw new Error("Supabase Storage returned an empty signed URL");
+
+  if (/^https?:\/\//i.test(signedUrl)) return signedUrl;
+  // Storage API commonly returns `/object/sign/...`; some deployments return
+  // `/storage/v1/object/sign/...`. Normalize both forms against the project URL.
+  if (signedUrl.startsWith("/storage/v1/")) return `${supabaseUrl}${signedUrl}`;
+  if (signedUrl.startsWith("/object/")) {
+    return `${supabaseUrl}/storage/v1${signedUrl}`;
+  }
+  return `${supabaseUrl}/storage/v1/${signedUrl.replace(/^\/+/, "")}`;
 }
