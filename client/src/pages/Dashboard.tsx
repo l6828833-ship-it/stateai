@@ -112,7 +112,24 @@ export default function Dashboard() {
     },
   });
   const deleteMutation = trpc.tour.deleteImage.useMutation({
-    onSuccess: () => utils.tour.getState.invalidate(),
+    // Optimistic: drop the image and re-compact order in the cache immediately
+    // so the UI feels instant instead of waiting for the server + refetch.
+    onMutate: async ({ imageId }) => {
+      await utils.tour.getState.cancel();
+      utils.tour.getState.setData(undefined, (prev) => {
+        if (!prev) return prev;
+        const images = prev.images
+          .filter((img) => img.id !== imageId)
+          .map((img, idx) => ({ ...img, sequenceIndex: idx }));
+        return { ...prev, images };
+      });
+    },
+    onError: (e) => {
+      // Roll back the optimistic removal by re-syncing with the server.
+      toast.error(e.message);
+      utils.tour.getState.invalidate();
+    },
+    onSettled: () => utils.tour.getState.invalidate(),
   });
   const settingsMutation = trpc.tour.updateSettings.useMutation({
     onSuccess: () => utils.tour.getState.invalidate(),
