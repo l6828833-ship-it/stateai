@@ -14,13 +14,23 @@ import {
   defaultDurationFor,
 } from "../inworld";
 import {
-  assertOpenRouterConfigured,
+  assertKlingConfigured,
+  decodeKlingProviderTaskId,
   downloadKlingVideo,
+  encodeKlingProviderTaskId,
+  findKlingTaskByExternalId,
   isVideoAspectRatio,
+  KlingAmbiguousSubmissionError,
+  klingExternalTaskIdForJob,
   OUTPUT_RESOLUTION,
   pollKlingJob,
   submitKlingVideo,
   type OrderedImage,
+} from "../kling";
+import {
+  downloadLegacyOpenRouterVideo,
+  hasLegacyOpenRouterKey,
+  pollLegacyOpenRouterJob,
 } from "../openrouter";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import {
@@ -191,7 +201,7 @@ function isAdditionalVideoJob(imageSequence: string | null): boolean {
 export function toClientJob(job: GenerationJob) {
   const {
     optimizedPrompt,
-    openrouterJobId,
+    providerTaskId,
     videoKey,
     errorMessage,
     imageSequence,
@@ -407,11 +417,11 @@ export const tourRouter = router({
 
   /**
    * REAL generation — paid subscribers only. This is the ONLY code path that
-   * spends OpenRouter credits. Order of operations:
+   * spends official Kling API credits. Order of operations:
    *   1. verify active subscription (server-side, non-negotiable)
    *   2. load images strictly ordered by sequenceIndex, validate gapless
    *   3. hidden LLM analysis/prompt optimization (never returned to client)
-   *   4. submit a Kling 3.0 Pro job, persist job row with status "processing"
+   *   4. submit an official Kling 3.0 image-to-video task and persist its id
    */
   generate: protectedProcedure
     .input(
@@ -441,7 +451,7 @@ export const tourRouter = router({
 
       try {
         assertInworldConfigured();
-        assertOpenRouterConfigured();
+        assertKlingConfigured();
       } catch (error) {
         console.error("[Generation] Provider configuration error", error);
         throw new TRPCError({
@@ -567,17 +577,40 @@ export const tourRouter = router({
           duration = defaultDurationFor(sorted.length);
         }
 
-        const submission = await submitKlingVideo({
-          prompt: optimizedPrompt,
-          images: orderedPublic,
-          duration,
-          aspectRatio,
-        });
-
+        // Persist the analysis first so it survives even if the submission
+        // response is lost and the task is later reconciled by external id.
         await db.updateGenerationJob(job.id, {
           optimizedPrompt,
           clipDuration: duration,
-          openrouterJobId: submission.jobId,
+        });
+
+        let submission: Awaited<ReturnType<typeof submitKlingVideo>>;
+        try {
+          submission = await submitKlingVideo({
+            prompt: optimizedPrompt,
+            images: orderedPublic,
+            duration,
+            aspectRatio,
+            externalTaskId: klingExternalTaskIdForJob(job.id),
+          });
+        } catch (submissionError) {
+          if (submissionError instanceof KlingAmbiguousSubmissionError) {
+            // The task may already be accepted by Kling. Keep the job
+            // processing (no stored task id yet) so pollJob reconciles it by
+            // its unique external id. Never fail it here — that would let an
+            // included-plan retry submit a second paid task, and it would
+            // wrongly consume a paid add-on entitlement.
+            console.warn("[Generation] Ambiguous Kling submission; awaiting reconciliation", {
+              jobId: job.id,
+            });
+            const pending = await db.getGenerationJob(job.id, ctx.user.id);
+            return toClientJobWithMedia(pending!, false);
+          }
+          throw submissionError;
+        }
+
+        await db.updateGenerationJob(job.id, {
+          providerTaskId: encodeKlingProviderTaskId(submission.taskId),
         });
 
         const fresh = await db.getGenerationJob(job.id, ctx.user.id);
@@ -600,8 +633,10 @@ export const tourRouter = router({
     }),
 
   /**
-   * Poll a job. If still processing on OpenRouter's side, checks progress;
-   * when completed, downloads the video into Supabase Storage and marks it "ready".
+   * Poll an official Kling task. A processing row without a stored task id is
+   * reconciled by its unique external id, covering a crash or lost response
+   * between provider acceptance and the database update. Unprefixed ids are
+   * legacy OpenRouter tasks and can drain while the old key remains configured.
    */
   pollJob: protectedProcedure
     .input(z.object({ jobId: z.number() }))
@@ -609,22 +644,70 @@ export const tourRouter = router({
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
       if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
       const includeVideo = await db.hasActiveSubscription(ctx.user.id);
-      if (job.status !== "processing" || !job.openrouterJobId) {
+      if (job.status !== "processing") {
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      let poll: Awaited<ReturnType<typeof pollKlingJob>>;
+      let storedTaskId = job.providerTaskId;
+      let klingTaskId = decodeKlingProviderTaskId(storedTaskId);
+
+      if (!storedTaskId) {
+        try {
+          const recovered = await findKlingTaskByExternalId(
+            klingExternalTaskIdForJob(job.id),
+          );
+          if (!recovered) return toClientJobWithMedia(job, includeVideo);
+          storedTaskId = encodeKlingProviderTaskId(recovered.taskId);
+          klingTaskId = recovered.taskId;
+          await db.updateGenerationJob(job.id, { providerTaskId: storedTaskId });
+        } catch (error) {
+          // The task may not be visible immediately after submission. Keep the
+          // reservation processing and reconcile it on the next client poll.
+          console.warn("[Generation] Kling task reconciliation failed", {
+            jobId: job.id,
+            error,
+          });
+          return toClientJobWithMedia(job, includeVideo);
+        }
+      }
+
+      const provider = klingTaskId ? "kling" : "openrouter-legacy";
+      const providerTaskId = klingTaskId ?? storedTaskId;
+      if (!providerTaskId) return toClientJobWithMedia(job, includeVideo);
+      if (provider === "openrouter-legacy" && !hasLegacyOpenRouterKey()) {
+        console.error("[Generation] Legacy OpenRouter job cannot be polled without its key", {
+          jobId: job.id,
+        });
+        return toClientJobWithMedia(job, includeVideo);
+      }
+
+      let poll: {
+        status: string;
+        videoUrl: string | null;
+        error: string | null;
+      };
       try {
-        poll = await pollKlingJob(job.openrouterJobId);
+        poll = klingTaskId
+          ? await pollKlingJob(klingTaskId)
+          : await pollLegacyOpenRouterJob(providerTaskId);
       } catch (error) {
         // Upstream polling failures are usually transient; keep processing.
-        console.warn("[Generation] Poll error for job", job.id, error);
+        console.warn("[Generation] Provider poll error", {
+          jobId: job.id,
+          provider,
+          error,
+        });
         return toClientJobWithMedia(job, includeVideo);
       }
 
       if (poll.status === "completed") {
         try {
-          const videoBuffer = await downloadKlingVideo(job.openrouterJobId, poll.videoUrl);
+          if (!poll.videoUrl && klingTaskId) {
+            throw new Error("Kling completed without a downloadable output URL");
+          }
+          const videoBuffer = klingTaskId
+            ? await downloadKlingVideo(poll.videoUrl!)
+            : await downloadLegacyOpenRouterVideo(providerTaskId, poll.videoUrl);
           const { key, url } = await storagePut(
             `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
             videoBuffer,
@@ -637,7 +720,7 @@ export const tourRouter = router({
           });
         } catch (error) {
           // A completed generation that cannot be archived should stop polling;
-          // otherwise every 5-second poll downloads and uploads it again.
+          // otherwise every five-second poll downloads and uploads it again.
           console.error("[Generation] Archival error for job", job.id, error);
           await db.updateGenerationJob(job.id, {
             status: "failed",
@@ -646,8 +729,9 @@ export const tourRouter = router({
           });
         }
       } else if (["failed", "cancelled", "expired"].includes(poll.status)) {
-        console.error("[Generation] OpenRouter job ended", {
+        console.error("[Generation] Provider job ended", {
           jobId: job.id,
+          provider,
           status: poll.status,
           providerError: poll.error,
         });

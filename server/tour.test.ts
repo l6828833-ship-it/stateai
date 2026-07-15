@@ -22,7 +22,7 @@ describe("job status labels", () => {
 });
 
 describe("client job serialization hides internal fields", () => {
-  it("strips optimizedPrompt and openrouterJobId from client payloads", async () => {
+  it("strips optimizedPrompt and providerTaskId from client payloads", async () => {
     const { toClientJob } = await import("./routers/tour");
     const fakeJob = {
       id: 1,
@@ -34,8 +34,9 @@ describe("client job serialization hides internal fields", () => {
       aspectRatio: "16:9",
       clipDuration: 5,
       imageCount: 3,
+      imageSequence: "[1,2,3]",
       optimizedPrompt: "SECRET internal prompt",
-      openrouterJobId: "vg_secret_123",
+      providerTaskId: "kling:893605946402811985",
       videoUrl: null,
       videoKey: null,
       thumbnailUrl: null,
@@ -45,7 +46,8 @@ describe("client job serialization hides internal fields", () => {
     };
     const client = toClientJob(fakeJob as never);
     expect(client).not.toHaveProperty("optimizedPrompt");
-    expect(client).not.toHaveProperty("openrouterJobId");
+    expect(client).not.toHaveProperty("providerTaskId");
+    expect(client).not.toHaveProperty("imageSequence");
     expect(client.status).toBe("processing");
   });
 });

@@ -136,8 +136,11 @@ export const generationJobs = pgTable("generation_jobs", {
   imageSequence: text("imageSequence"),
   /** Hidden: Inworld-optimized prompt sent to Kling. NEVER exposed to client. */
   optimizedPrompt: text("optimizedPrompt"),
-  /** OpenRouter async video job id */
-  openrouterJobId: varchar("openrouterJobId", { length: 128 }),
+  /**
+   * Async video-provider task id. The physical column keeps its historical
+   * name for zero-downtime compatibility; official Kling ids use `kling:`.
+   */
+  providerTaskId: varchar("openrouterJobId", { length: 128 }),
   /** Final video storage */
   videoKey: varchar("videoKey", { length: 512 }),
   videoUrl: varchar("videoUrl", { length: 768 }),

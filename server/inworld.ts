@@ -4,8 +4,8 @@
  * Responsible for the hidden IMAGE ANALYSIS / prompt-optimization step: all
  * project photos (in strict sequence order) are sent to a vision LLM through
  * Inworld's OpenAI-compatible Router in a single multimodal call, returning a
- * structured plan + one optimized prompt that is then handed to Kling 3.0 Pro
- * (via OpenRouter) for the actual video generation.
+ * structured plan + one optimized prompt that is then handed to Kling's
+ * official 3.0 image-to-video API for the actual video generation.
  *
  * The result is stored server-side only and never exposed to clients.
  *
@@ -17,7 +17,7 @@
  *   Authorization: Basic <INWORLD_API_KEY>
  */
 import { ENV } from "./_core/env";
-import type { OrderedImage } from "./openrouter";
+import type { OrderedImage } from "./kling";
 
 const INWORLD_BASE = "https://api.inworld.ai/v1";
 
