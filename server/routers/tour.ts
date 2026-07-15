@@ -11,6 +11,7 @@ import {
   analyzeAndOptimizePrompt,
   assertInworldConfigured,
   buildFallbackPrompt,
+  clampSegmentDuration,
   defaultDurationFor,
 } from "../inworld";
 import {
@@ -249,13 +250,6 @@ async function toClientJobWithMedia(job: GenerationJob, includeVideo: boolean) {
   ]);
   return { ...safe, thumbnailUrl, videoUrl };
 }
-
-/**
- * Duration (seconds) for each room-to-room segment of a multi-image tour.
- * Total tour length ≈ (imageCount - 1) × this. A single-image tour instead
- * uses the AI-chosen clip length.
- */
-const SEGMENT_DURATION_SECONDS = 5;
 
 /**
  * Safety net for stranded jobs. If a segment submission was ambiguous AND Kling
@@ -645,15 +639,15 @@ export const tourRouter = router({
         // movement, the optimized prompt AND the ideal clip length. Failure
         // falls back to a solid template rather than blocking paid generation.
         let optimizedPrompt: string;
-        let duration: number;
+        let segmentDurations: number[];
         try {
           const analysis = await analyzeAndOptimizePrompt({ images: orderedPublic });
           optimizedPrompt = analysis.optimizedPrompt;
-          duration = analysis.duration;
+          segmentDurations = analysis.segmentDurations;
         } catch (e) {
           console.warn("[Generation] Prompt optimization failed, using fallback:", e);
           optimizedPrompt = buildFallbackPrompt(sorted.length);
-          duration = defaultDurationFor(sorted.length);
+          segmentDurations = []; // per-segment default applied below
         }
 
         // Split the tour into first/last-frame segments so EVERY uploaded
@@ -661,9 +655,12 @@ export const tourRouter = router({
         // and optional last frame per task). Segments are polled and stitched
         // back together later. One image → one single-frame segment.
         const segments = planKlingSegments(orderedPublic);
-        const perSegmentDuration =
-          orderedPublic.length <= 1 ? duration : SEGMENT_DURATION_SECONDS;
-        const totalDuration = perSegmentDuration * segments.length;
+        // The AI picks each shot's length (capped at 6s); clamp defensively and
+        // fall back to the default for any shot the model omitted.
+        const durations = segments.map((segment) =>
+          clampSegmentDuration(segmentDurations[segment.index]),
+        );
+        const totalDuration = durations.reduce((sum, value) => sum + value, 0);
 
         // Persist the analysis and total length first so they survive even if a
         // submission response is lost; segments are reconciled by their
@@ -684,7 +681,7 @@ export const tourRouter = router({
             await submitKlingVideo({
               prompt: optimizedPrompt,
               images: segment.images,
-              duration: perSegmentDuration,
+              duration: durations[segment.index],
               aspectRatio,
               externalTaskId: klingSegmentExternalTaskId(job.id, segment.index),
             });
