@@ -360,16 +360,21 @@ export async function deleteProjectImage(imageId: number, userId: number) {
     .delete(projectImages)
     .where(and(eq(projectImages.id, imageId), eq(projectImages.userId, userId)));
 
-  // Re-compact sequence indexes so order stays gapless.
+  // Re-compact sequence indexes so order stays gapless. Issue the updates
+  // concurrently (pipelined over one connection) instead of awaiting each in
+  // sequence, so deleting from a large plan is not N slow round-trips.
   const remaining = await getProjectImages(image.projectId, userId);
-  for (let i = 0; i < remaining.length; i++) {
-    if (remaining[i].sequenceIndex !== i) {
-      await db
-        .update(projectImages)
-        .set({ sequenceIndex: i })
-        .where(eq(projectImages.id, remaining[i].id));
-    }
-  }
+  await Promise.all(
+    remaining
+      .map((img, i) => ({ img, i }))
+      .filter(({ img, i }) => img.sequenceIndex !== i)
+      .map(({ img, i }) =>
+        db
+          .update(projectImages)
+          .set({ sequenceIndex: i })
+          .where(eq(projectImages.id, img.id)),
+      ),
+  );
 }
 
 export async function updateImageRoomTag(imageId: number, userId: number, roomTag: string) {
