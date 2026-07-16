@@ -56,11 +56,21 @@ export function useAuth(options?: UseAuthOptions) {
     }
   }, [logoutMutation, utils]);
 
+  // Keep the preview runtime cache best-effort. Browser privacy settings,
+  // embedded previews, or a full storage quota can make localStorage throw;
+  // none of those conditions should prevent auth state from rendering.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "manus-runtime-user-info",
+        JSON.stringify(meQuery.data)
+      );
+    } catch {
+      // The server session remains canonical when browser storage is unavailable.
+    }
+  }, [meQuery.data]);
+
   const state = useMemo(() => {
-    localStorage.setItem(
-      "manus-runtime-user-info",
-      JSON.stringify(meQuery.data)
-    );
     return {
       user: meQuery.data ?? null,
       loading: authQueryPending || logoutMutation.isPending,

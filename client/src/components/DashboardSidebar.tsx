@@ -48,13 +48,18 @@ export default function DashboardSidebar({
 
   const stats = useMemo(() => {
     const jobs = jobsQuery.data ?? [];
+    const unavailable = !jobsQuery.data && !jobsQuery.isSuccess;
     const readyCount = jobs.filter(j => j.status === "ready").length;
     const processingCount = jobs.filter(j => j.status === "processing").length;
-    return { readyCount, processingCount, totalJobs: jobs.length };
-  }, [jobsQuery.data]);
+    return {
+      readyCount: unavailable ? "—" : readyCount,
+      processingCount: unavailable ? "—" : processingCount,
+      totalJobs: unavailable ? "—" : jobs.length,
+    };
+  }, [jobsQuery.data, jobsQuery.isSuccess]);
 
   const navItems = [
-    { icon: Home, label: "Dashboard", id: "dashboard", section: "create" },
+    { icon: Home, label: "Dashboard", id: "overview", section: "overview" },
     { icon: Film, label: "Create Tour", id: "create", section: "create" },
     { icon: History, label: "My Videos", id: "videos", section: "videos" },
     {
@@ -153,6 +158,7 @@ export default function DashboardSidebar({
                     onNavigate?.(item.section);
                     onClose?.();
                   }}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
                     "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
                     active
