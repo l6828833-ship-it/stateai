@@ -31,6 +31,7 @@ const userIdInput = z.object({ userId: z.number().int().positive() });
 async function refreshMissingSubscriptionPeriods(
   items: Array<{
     id: number;
+    billingSource?: string | null;
     stripeSubscriptionId: string | null;
     currentPeriodStart: Date | null;
   }>
@@ -38,16 +39,27 @@ async function refreshMissingSubscriptionPeriods(
   let refreshed = false;
   await Promise.all(
     items
-      .filter(item => item.stripeSubscriptionId && !item.currentPeriodStart)
+      .filter(
+        item =>
+          item.billingSource !== "admin" &&
+          item.stripeSubscriptionId &&
+          !item.currentPeriodStart
+      )
       .map(async item => {
         try {
           const entitlement = await getStripeGenerationEntitlement(item.id);
           if (!entitlement) return;
-          await db.upsertSubscription(item.id, {
-            currentPeriodStart: entitlement.periodStart,
-            currentPeriodEnd: entitlement.periodEnd,
-          });
-          refreshed = true;
+          // Conditioned on the same Stripe subscription so a concurrent admin
+          // grant is never overwritten with stale Stripe period dates.
+          const applied = await db.refreshStripeSubscriptionPeriod(
+            item.id,
+            item.stripeSubscriptionId!,
+            {
+              currentPeriodStart: entitlement.periodStart,
+              currentPeriodEnd: entitlement.periodEnd,
+            }
+          );
+          if (applied) refreshed = true;
         } catch (error) {
           console.warn("[Admin] Could not refresh Stripe billing period", {
             userId: item.id,
@@ -210,25 +222,41 @@ export const adminRouter = router({
         });
       }
       const context = requestContext(ctx);
-      // Persist intent before touching Stripe so every external billing mutation
-      // has an immutable record even if Stripe succeeds and DB synchronization fails.
+      const existing = await db.getSubscription(input.userId);
+      const hasLiveStripeSubscription = Boolean(
+        existing?.billingSource === "stripe" &&
+        existing.stripeSubscriptionId &&
+        !["inactive", "canceled", "incomplete_expired"].includes(
+          existing.status
+        )
+      );
+      const source = hasLiveStripeSubscription ? "stripe" : "admin";
+      // Persist intent before touching Stripe or granting access so every
+      // privileged billing mutation has an immutable audit record.
       await db.createAdminAuditLog({
         actorUserId: ctx.user.id,
         targetUserId: input.userId,
         action: "subscription.plan_change_requested",
-        details: { planId: input.planId, source: "stripe" },
+        details: { planId: input.planId, source },
         context,
       });
       try {
-        await changeSubscriptionPlan(input.userId, input.planId as PlanId);
+        if (source === "stripe") {
+          await changeSubscriptionPlan(input.userId, input.planId as PlanId);
+        } else {
+          await db.setAdminManagedPlan({
+            targetUserId: input.userId,
+            planId: input.planId as PlanId,
+          });
+        }
         await db.createAdminAuditLog({
           actorUserId: ctx.user.id,
           targetUserId: input.userId,
           action: "subscription.plan_change_completed",
-          details: { planId: input.planId, source: "stripe" },
+          details: { planId: input.planId, source },
           context,
         });
-        return { ok: true } as const;
+        return { ok: true, source } as const;
       } catch (error) {
         await db
           .createAdminAuditLog({
@@ -237,9 +265,11 @@ export const adminRouter = router({
             action: "subscription.plan_change_failed",
             details: {
               planId: input.planId,
-              source: "stripe",
+              source,
               error:
-                error instanceof Error ? error.message : "Unknown Stripe error",
+                error instanceof Error
+                  ? error.message
+                  : "Unknown billing error",
             },
             context,
           })

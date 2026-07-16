@@ -10,6 +10,7 @@ import TourTool, {
 import { Button } from "@/components/ui/button";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
+import { authenticatedFetch } from "@/lib/authenticatedFetch";
 import type { PlanId } from "@shared/plans";
 import {
   ArrowRight,
@@ -834,7 +835,7 @@ export default function Home() {
                 return;
               }
               try {
-                const response = await fetch(
+                const response = await authenticatedFetch(
                   `/api/billing/checkout?plan=${planId}`,
                   { method: "POST" }
                 );
