@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import PricingCards from "@/components/PricingCards";
+import PayAsYouGoCard from "@/components/PayAsYouGoCard";
 import TourTool, {
   type ToolImage,
   type ToolSettings,
@@ -153,7 +154,7 @@ function HeroPreview() {
 }
 
 export default function Home() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [, navigate] = useLocation();
   const { draft, update, setDraft } = useToolDraft();
   const heroRef = useRef<HTMLDivElement>(null);
@@ -823,6 +824,7 @@ export default function Home() {
           </div>
           <PricingCards
             className="reveal-on-scroll mx-auto mt-12 max-w-6xl"
+            promoUserKey={user?.id ?? "guest"}
             onSelectPlan={async (planId: PlanId) => {
               if (!isAuthenticated) {
                 try {
@@ -848,6 +850,15 @@ export default function Home() {
                 );
               }
             }}
+          />
+          <PayAsYouGoCard
+            className="reveal-on-scroll mx-auto mt-6 max-w-6xl"
+            onAction={() =>
+              navigate(isAuthenticated ? "/dashboard" : "/signup")
+            }
+            actionLabel={
+              isAuthenticated ? "Open dashboard" : "Create an account"
+            }
           />
         </div>
       </section>

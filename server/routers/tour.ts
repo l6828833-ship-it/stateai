@@ -5,7 +5,6 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_SIZE_MB,
   MAX_IMAGES,
-  type PlanId,
 } from "@shared/plans";
 import * as db from "../db";
 import {
@@ -34,6 +33,7 @@ import { storageGetSignedUrl, storagePut } from "../storage";
 import {
   getStripeGenerationEntitlement,
   verifyAdditionalVideoCheckout,
+  type GenerationEntitlement,
 } from "../billing";
 import { appProcedure, router } from "../_core/trpc";
 
@@ -274,6 +274,34 @@ async function toClientJobWithMedia(job: GenerationJob, includeVideo: boolean) {
  */
 const MAX_PROCESSING_AGE_MS = 45 * 60 * 1000;
 
+const DEFAULT_PLAN_LIMITS = {
+  maxImages: MAX_IMAGES,
+  maxDurationSeconds: 15,
+  additionalVideoPriceUsd: 17,
+};
+
+async function resolvePlanLimits(userId: number) {
+  const fallback = DEFAULT_PLAN_LIMITS;
+  try {
+    const entitlement = await getStripeGenerationEntitlement(userId);
+    return entitlement
+      ? {
+          maxImages: entitlement.maxImages,
+          maxDurationSeconds: entitlement.maxDurationSeconds,
+          additionalVideoPriceUsd: entitlement.additionalVideoPriceUsd,
+        }
+      : fallback;
+  } catch (error) {
+    // Uploads can safely retain Starter limits during a transient Stripe outage;
+    // costly generation still verifies the exact entitlement fail-closed.
+    console.warn("[Billing] Using safe upload limits while Stripe is unavailable", {
+      userId,
+      error,
+    });
+    return fallback;
+  }
+}
+
 /** Recover how many images a job was reserved with, from its stored sequence. */
 function imageCountFromSequence(imageSequence: string | null): number {
   if (!imageSequence) return 0;
@@ -395,6 +423,19 @@ export const tourRouter = router({
     };
   }),
 
+  /** Exact Stripe-backed limits, loaded separately so dashboard startup stays resilient. */
+  getPlanEntitlement: appProcedure.query(async ({ ctx }) => {
+    const subscription = await db.getSubscriptionAccess(ctx.user.id);
+    if (!subscription.subscribed) return null;
+    const entitlement = await getStripeGenerationEntitlement(ctx.user.id);
+    if (!entitlement) return null;
+    return {
+      maxImages: entitlement.maxImages,
+      maxDurationSeconds: entitlement.maxDurationSeconds,
+      additionalVideoPriceUsd: entitlement.additionalVideoPriceUsd,
+    };
+  }),
+
   updateSettings: appProcedure
     .input(
       z.object({
@@ -444,11 +485,12 @@ export const tourRouter = router({
           message: "Project not found",
         });
 
+      const { maxImages } = await resolvePlanLimits(ctx.user.id);
       const existing = await db.getProjectImages(project.id, ctx.user.id);
-      if (existing.length >= MAX_IMAGES) {
+      if (existing.length >= maxImages) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Maximum ${MAX_IMAGES} photos per tour`,
+          message: `Maximum ${maxImages} photos per tour`,
         });
       }
 
@@ -604,10 +646,31 @@ export const tourRouter = router({
           message: "Upload at least one photo first",
         });
       }
-      if (images.length > MAX_IMAGES) {
+      let billingEntitlement: GenerationEntitlement | undefined;
+      try {
+        billingEntitlement =
+          (await getStripeGenerationEntitlement(ctx.user.id)) ?? undefined;
+      } catch (error) {
+        console.error(
+          "[Generation] Could not verify Stripe entitlement",
+          error
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Your plan allowance could not be verified. Please try again.",
+        });
+      }
+      if (!billingEntitlement) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "A recognized active plan is required to generate videos",
+        });
+      }
+      if (images.length > billingEntitlement.maxImages) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Use no more than ${MAX_IMAGES} photos per video`,
+          message: `Use no more than ${billingEntitlement.maxImages} photos per video`,
         });
       }
       // Validate strict, gapless ordering before spending anything.
@@ -651,29 +714,6 @@ export const tourRouter = router({
         }
       }
 
-      let billingEntitlement:
-        | {
-            periodStart: Date;
-            periodEnd: Date;
-            enforceAllowance: boolean;
-            planId?: PlanId;
-          }
-        | undefined;
-      try {
-        billingEntitlement =
-          (await getStripeGenerationEntitlement(ctx.user.id)) ?? undefined;
-      } catch (error) {
-        console.error(
-          "[Generation] Could not verify Stripe entitlement",
-          error
-        );
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Your plan allowance could not be verified. Please try again.",
-        });
-      }
-
       // Reserve the plan allowance and create the job under one database lock.
       // This prevents concurrent requests from both claiming the final video.
       const reservation = await db.reserveGenerationJob(
@@ -684,7 +724,10 @@ export const tourRouter = router({
           tourStyle: project.tourStyle,
           resolution: OUTPUT_RESOLUTION,
           aspectRatio,
-          clipDuration: defaultDurationFor(sorted.length),
+          clipDuration: defaultDurationFor(
+            sorted.length,
+            billingEntitlement.maxDurationSeconds
+          ),
           thumbnailUrl: sorted[0]?.url ?? null,
         },
         sorted.map(image => image.id),
@@ -695,7 +738,7 @@ export const tourRouter = router({
         if (reservation.reason === "limit_reached") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: `Your plan's ${reservation.allowance}-video allowance is used. Additional videos are $17 each.`,
+            message: `Your plan's ${reservation.allowance}-video allowance is used. Additional videos are $${billingEntitlement.additionalVideoPriceUsd} each.`,
           });
         }
         if (reservation.reason === "period_unavailable") {
@@ -726,6 +769,7 @@ export const tourRouter = router({
         try {
           const analysis = await analyzeAndOptimizePrompt({
             images: orderedPublic,
+            maxDurationSeconds: billingEntitlement.maxDurationSeconds,
           });
           optimizedPrompt = analysis.optimizedPrompt;
           segmentDurations = analysis.segmentDurations;
@@ -743,20 +787,28 @@ export const tourRouter = router({
         // and optional last frame per task). Segments are polled and stitched
         // back together later. One image → one single-frame segment.
         const segments = planKlingSegments(orderedPublic);
-        // Normalize defensively so the complete stitched video stays at or
-        // below the product-wide 15-second limit.
+        // Provider segments remain within Kling's valid 3–6 second range.
+        // Post-production applies the plan's final-output cap when necessary.
         const durations = normalizeSegmentDurations(
           segments.map(segment => segmentDurations[segment.index]),
-          segments.length
+          segments.length,
+          billingEntitlement.maxDurationSeconds
         );
-        const totalDuration = durations.reduce((sum, value) => sum + value, 0);
+        const sourceDuration = durations.reduce(
+          (sum, value) => sum + value,
+          0
+        );
+        const finalDuration = Math.min(
+          sourceDuration,
+          billingEntitlement.maxDurationSeconds
+        );
 
         // Persist the analysis and total length first so they survive even if a
         // submission response is lost; segments are reconciled by their
         // deterministic external ids on poll.
         await db.updateGenerationJob(job.id, {
           optimizedPrompt,
-          clipDuration: totalDuration,
+          clipDuration: finalDuration,
         });
 
         // Submit each segment once. The external id is deterministic per
@@ -911,10 +963,11 @@ export const tourRouter = router({
         for (const segment of segments) {
           buffers.push(await downloadKlingVideo(segment.videoUrl!));
         }
-        const finalVideo =
-          buffers.length === 1
-            ? buffers[0]
-            : await concatMp4Segments(buffers, job.aspectRatio);
+        const finalVideo = await concatMp4Segments(
+          buffers,
+          job.aspectRatio,
+          job.clipDuration
+        );
         const { key, url } = await storagePut(
           `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
           finalVideo,

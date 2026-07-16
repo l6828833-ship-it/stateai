@@ -493,6 +493,10 @@ export async function reserveGenerationJob(
     periodEnd: Date;
     enforceAllowance: boolean;
     planId?: PlanId;
+    includedVideos: number;
+    maxImages: number;
+    maxDurationSeconds: number;
+    additionalVideoPriceUsd: number;
   }
 ): Promise<GenerationReservation> {
   const database = await getDb();
@@ -552,8 +556,8 @@ export async function reserveGenerationJob(
       return { ok: true, job: created, shouldSubmit: true } as const;
     }
 
-    // Current v2 prices enforce the new limit using the plan classified from
-    // Stripe itself. Exact known v1 prices retain their previously sold access.
+    // Versioned prices enforce the immutable allowance classified from Stripe.
+    // Exact older legacy prices retain their previously sold unrestricted access.
     if (billingEntitlement.enforceAllowance) {
       const entitlementPlanId = billingEntitlement.planId;
       if (!entitlementPlanId) {
@@ -579,7 +583,7 @@ export async function reserveGenerationJob(
         billingEntitlement.periodEnd.getTime();
       const allowance = Math.max(
         0,
-        PLAN_BY_ID[entitlementPlanId].includedVideos +
+        billingEntitlement.includedVideos +
           (adjustmentApplies ? (subscription.usageAdjustment ?? 0) : 0)
       );
       if (used >= allowance) {

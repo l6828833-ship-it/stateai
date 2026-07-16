@@ -47,6 +47,8 @@ interface TourToolProps {
   generateLabel?: string;
   generating?: boolean;
   disabled?: boolean;
+  maxImages?: number;
+  maxDurationSeconds?: number;
 }
 
 /** Each aspect ratio gets an icon + plain-language purpose so users know what it's for. */
@@ -70,6 +72,8 @@ export default function TourTool({
   generateLabel = "Generate Tour Video",
   generating = false,
   disabled = false,
+  maxImages = MAX_IMAGES,
+  maxDurationSeconds = 15,
 }: TourToolProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -87,9 +91,9 @@ export default function TourTool({
         toast.error("Please upload JPG, PNG, or WebP photos");
         return;
       }
-      const room = MAX_IMAGES - images.length;
+      const room = maxImages - images.length;
       if (room <= 0) {
-        toast.error(`Maximum ${MAX_IMAGES} photos per tour`);
+        toast.error(`Maximum ${maxImages} photos per tour`);
         return;
       }
       if (files.length > room) {
@@ -99,7 +103,7 @@ export default function TourTool({
       setJustDropped(true);
       setTimeout(() => setJustDropped(false), 1400);
     },
-    [images.length, onFilesAdded],
+    [images.length, maxImages, onFilesAdded],
   );
 
   // --- Thumbnail drag-to-reorder ---
@@ -192,7 +196,7 @@ export default function TourTool({
               {justDropped ? "Photos added" : "Drop your property photos here"}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              or click to browse — JPG, PNG, WebP · up to {MAX_IMAGES} photos
+              or click to browse — JPG, PNG, WebP · up to {maxImages} photos
             </p>
           </div>
         </div>
@@ -207,7 +211,7 @@ export default function TourTool({
               Play order — the video follows this exact sequence
             </h3>
             <span className="text-xs text-muted-foreground">
-              {images.length}/{MAX_IMAGES} photos
+              {images.length}/{maxImages} photos
             </span>
           </div>
           <p className="mb-3 text-xs text-muted-foreground">
@@ -343,7 +347,7 @@ export default function TourTool({
         <p>
           Just set the order and aspect ratio — our AI does the rest. It studies each photo, picks
           the best cinematic style and camera move for every shot (aerial reveals for exteriors,
-          smooth glides inside rooms), and chooses the perfect length automatically (up to 15s).
+          smooth glides inside rooms), and chooses the perfect length automatically (up to {maxDurationSeconds}s).
           Every tour renders in crisp 1080p and instructs the video model to preserve the source
           rooms, furniture, materials, and composition as closely as possible.
         </p>

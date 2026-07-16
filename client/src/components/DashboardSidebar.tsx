@@ -18,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { planForStoredId } from "@shared/plans";
 
 interface DashboardSidebarProps {
   isOpen?: boolean;
@@ -29,6 +30,7 @@ interface DashboardSidebarProps {
   onUpgradeClick?: () => void;
   onBuyAdditionalVideo?: () => void;
   onBillingClick?: () => void;
+  additionalVideoPriceUsd?: number;
 }
 
 export default function DashboardSidebar({
@@ -41,6 +43,7 @@ export default function DashboardSidebar({
   onUpgradeClick,
   onBuyAdditionalVideo,
   onBillingClick,
+  additionalVideoPriceUsd,
 }: DashboardSidebarProps) {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
@@ -75,11 +78,10 @@ export default function DashboardSidebar({
     navigate("/");
   };
 
+  const catalogPlan = planForStoredId(currentPlan);
   const planLabel = subscribed
-    ? currentPlan
-      ? currentPlan
-          .replaceAll("_", " ")
-          .replace(/\b\w/g, letter => letter.toUpperCase()) + " Plan"
+    ? catalogPlan
+      ? `${catalogPlan.name} ${catalogPlan.interval === "year" ? "Yearly" : "Monthly"} Plan`
       : "Active Plan"
     : "Free Account";
 
@@ -246,7 +248,10 @@ export default function DashboardSidebar({
                   className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
                   onClick={onBuyAdditionalVideo}
                 >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $17
+                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video
+                  {additionalVideoPriceUsd
+                    ? ` · $${additionalVideoPriceUsd}`
+                    : ""}
                 </Button>
                 <Button
                   variant="outline"
