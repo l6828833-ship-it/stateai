@@ -34,10 +34,9 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-const HERO_VIDEO_URL =
-  "https://pub-1271a678a52f4664aa377c2be4276e07.r2.dev/0708(3).mp4";
-/** Shown while the hero video is still buffering. */
-const HERO_VIDEO_POSTER = "/manus-storage/hero-living_b05098b0.jpg";
+const HERO_IMG_1 = "/manus-storage/hero-living_b05098b0.jpg";
+const HERO_IMG_2 = "/manus-storage/hero-kitchen2_815b2217.jpg";
+const HERO_IMG_3 = "/manus-storage/hero-aerial_18f0bf6c.jpg";
 
 /** Scroll-reveal helper */
 function useReveal() {
@@ -59,8 +58,25 @@ function useReveal() {
   }, []);
 }
 
-/** Hero preview card that loops a cinematic AI-generated tour video */
+const HERO_ROOMS = [
+  { src: HERO_IMG_1, label: "Living room" },
+  { src: HERO_IMG_2, label: "Kitchen" },
+  { src: HERO_IMG_3, label: "Aerial view" },
+];
+
+/** Hero preview card that crossfades between room shots with ken-burns motion */
 function HeroPreview() {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const t = setInterval(
+      () => setFrame(f => (f + 1) % HERO_ROOMS.length),
+      4500
+    );
+    return () => clearInterval(t);
+  }, []);
+  const current = HERO_ROOMS[frame];
+  const next = HERO_ROOMS[(frame + 1) % HERO_ROOMS.length];
+
   return (
     <div className="relative">
       {/* Floating "render time" chip */}
@@ -83,17 +99,17 @@ function HeroPreview() {
 
       <div className="glass-panel relative overflow-hidden rounded-3xl p-2 sm:p-3">
         <div className="relative aspect-video overflow-hidden rounded-2xl bg-muted">
-          <video
-            src={HERO_VIDEO_URL}
-            poster={HERO_VIDEO_POSTER}
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            aria-label="AI-generated cinematic real estate tour preview"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          {HERO_ROOMS.map((room, i) => (
+            <img
+              key={room.src}
+              src={room.src}
+              alt={`AI house tour preview — ${room.label}`}
+              className={cn(
+                "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
+                i === frame ? "opacity-100 animate-ken-burns" : "opacity-0"
+              )}
+            />
+          ))}
 
           {/* Top overlay: live recording badge */}
           <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
@@ -106,15 +122,25 @@ function HeroPreview() {
             </span>
           </div>
 
-          {/* Bottom overlay: tour caption + scrubber */}
+          {/* Bottom overlay: room transition caption + scrubber */}
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
             <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-white">
               <span className="flex items-center gap-1.5">
                 <Clapperboard className="h-3.5 w-3.5" />
-                AI-directed property tour
+                {
+                  current.label
+                } <ArrowRight className="h-3 w-3 opacity-70" /> {next.label}
               </span>
-              <span className="flex items-center gap-1.5 opacity-80">
-                Now playing <ArrowRight className="h-3 w-3" />
+              <span className="flex gap-1">
+                {HERO_ROOMS.map((_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1.5 rounded-full transition-all duration-500",
+                      i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50"
+                    )}
+                  />
+                ))}
               </span>
             </div>
             {/* Scrub track */}
