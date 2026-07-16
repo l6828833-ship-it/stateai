@@ -60,12 +60,13 @@ export function registerOAuthRoutes(app: Express) {
       });
 
       const user = await db.getUserByOpenId(userInfo.openId);
-      if (!user || user.accountStatus !== "active") {
-        res.status(403).json({ error: "Unable to sign in to this account" });
+      if (!user || user.disabledAt) {
+        res.status(403).json({ error: "account disabled" });
         return;
       }
+
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
-        name: userInfo.name || user.email || "User",
+        name: userInfo.name || userInfo.email || "User",
         sessionVersion: user.sessionVersion,
         expiresInMs: ONE_YEAR_MS,
       });

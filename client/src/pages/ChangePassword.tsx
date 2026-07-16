@@ -1,155 +1,116 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
+import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Clapperboard, KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 export default function ChangePassword() {
   const { user, loading } = useAuth();
   const [, navigate] = useLocation();
-  const utils = trpc.useUtils();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const utils = trpc.useUtils();
+  const mutation = trpc.auth.changePassword.useMutation();
 
   useEffect(() => {
-    if (loading) return;
-    if (!user) navigate("/login");
-    else if (!user.mustChangePassword) navigate("/dashboard");
+    if (!loading && !user) navigate("/login");
+    if (!loading && user && !user.forcePasswordChange) navigate("/dashboard");
   }, [loading, navigate, user]);
 
-  const mutation = trpc.auth.changePassword.useMutation({
-    onSuccess: async result => {
-      utils.auth.me.setData(undefined, result.user);
-      await utils.auth.me.invalidate();
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      toast.success(
-        "Password changed. Your other sessions have been signed out."
-      );
-      navigate("/dashboard");
-    },
-    onError: mutationError => setError(mutationError.message),
-  });
+  if (loading || !user) return null;
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setError(null);
-    if (newPassword.length < 12) {
-      setError("Use at least 12 characters for your new password.");
-      return;
-    }
     if (newPassword !== confirmPassword) {
-      setError("The new passwords do not match.");
+      toast.error("New passwords do not match");
       return;
     }
-    if (newPassword === currentPassword) {
-      setError(
-        "Choose a new password that is different from the temporary password."
+    try {
+      await mutation.mutateAsync({ currentPassword, newPassword });
+      await utils.auth.me.invalidate();
+      toast.success("Password updated. Other sessions were signed out.");
+      navigate("/dashboard");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update password"
       );
-      return;
     }
-    mutation.mutate({ currentPassword, newPassword });
   };
 
-  if (loading || !user || !user.mustChangePassword) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/20">
-        <Loader2 className="h-7 w-7 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-muted/20 px-4 py-12">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(247,184,208,0.35),transparent_42%),radial-gradient(circle_at_bottom_right,rgba(201,138,214,0.25),transparent_38%)]" />
-      <main className="relative w-full max-w-md rounded-3xl border bg-background/90 p-7 shadow-2xl backdrop-blur-xl sm:p-9">
-        <div className="flex items-center gap-2 font-display text-lg">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Clapperboard className="h-4 w-4" />
-          </span>
-          EstateTour AI
-        </div>
-        <div className="mt-7 flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-950 text-white">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-16">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(247,184,208,.28),transparent_42%)]" />
+      <form
+        onSubmit={submit}
+        className="relative w-full max-w-md rounded-3xl border border-zinc-200 bg-white/90 p-7 shadow-2xl shadow-zinc-950/10 backdrop-blur-xl sm:p-9"
+      >
+        <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-950 text-white">
           <KeyRound className="h-5 w-5" />
-        </div>
-        <h1 className="mt-5 font-display text-2xl">Create a new password</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          An administrator issued a one-time temporary password. Change it
-          before continuing to your account.
+        </span>
+        <h1 className="mt-5 font-display text-2xl text-zinc-950">
+          Create a new password
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-zinc-500">
+          An administrator issued a temporary password. Replace it before
+          continuing to your studio.
         </p>
-
-        {error && (
-          <div className="mt-5 rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={submit} className="mt-6 space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="current-password">Temporary password</Label>
+        <div className="mt-7 space-y-4">
+          <label className="block text-sm font-medium text-zinc-700">
+            Temporary password
             <Input
-              id="current-password"
+              className="mt-1.5"
               type="password"
               autoComplete="current-password"
               value={currentPassword}
               onChange={event => setCurrentPassword(event.target.value)}
               required
-              autoFocus
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="new-password">New password</Label>
+          </label>
+          <label className="block text-sm font-medium text-zinc-700">
+            New password
             <Input
-              id="new-password"
+              className="mt-1.5"
               type="password"
               autoComplete="new-password"
+              minLength={8}
               value={newPassword}
               onChange={event => setNewPassword(event.target.value)}
-              minLength={12}
               required
             />
-            <p className="text-xs text-muted-foreground">
-              Use at least 12 characters and do not reuse the temporary
-              password.
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="confirm-password">Confirm new password</Label>
+          </label>
+          <label className="block text-sm font-medium text-zinc-700">
+            Confirm new password
             <Input
-              id="confirm-password"
+              className="mt-1.5"
               type="password"
               autoComplete="new-password"
+              minLength={8}
               value={confirmPassword}
               onChange={event => setConfirmPassword(event.target.value)}
-              minLength={12}
               required
             />
-          </div>
-          <Button
-            type="submit"
-            className="mt-2 w-full rounded-full py-6"
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              "Change password and continue"
-            )}
-          </Button>
-        </form>
-        <p className="mt-5 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-          For your security, changing the password revokes all previous
-          sessions. Administrators cannot view your password.
+          </label>
+        </div>
+        <Button
+          type="submit"
+          disabled={mutation.isPending}
+          className="mt-6 h-11 w-full rounded-full bg-zinc-950 text-white hover:bg-zinc-800"
+        >
+          {mutation.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            "Save password and continue"
+          )}
+        </Button>
+        <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-zinc-400">
+          <ShieldCheck className="h-3.5 w-3.5" /> All other sessions will be
+          revoked
         </p>
-      </main>
-    </div>
+      </form>
+    </main>
   );
 }

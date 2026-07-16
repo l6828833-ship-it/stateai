@@ -54,6 +54,7 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   google_token: "Couldn't complete Google sign-in. Please try again.",
   google_userinfo: "Couldn't read your Google profile. Please try again.",
   google: "Google sign-in failed. Please try again.",
+  account_disabled: "This account is disabled. Contact an administrator.",
 };
 
 export default function Auth({
@@ -99,10 +100,7 @@ export default function Auth({
 
   const finishAuthed = async () => {
     await utils.auth.me.invalidate();
-    const currentUser = await utils.auth.me.fetch();
-    navigate(
-      currentUser?.mustChangePassword ? "/change-password" : "/dashboard"
-    );
+    navigate("/dashboard");
   };
 
   const signupMutation = trpc.auth.signup.useMutation({

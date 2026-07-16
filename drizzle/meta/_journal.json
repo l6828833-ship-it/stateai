@@ -8,13 +8,6 @@
       "when": 1783994954619,
       "tag": "0000_empty_ultimo",
       "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1784207394539,
-      "tag": "0001_admin_billing_foundation",
-      "breakpoints": true
     }
   ]
 }

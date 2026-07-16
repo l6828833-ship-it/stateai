@@ -9,6 +9,7 @@ import {
   isNull,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -23,11 +24,10 @@ import {
   projectImages,
   projects,
   subscriptions,
-  usageAdjustments,
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import type { PlanId } from "../shared/plans";
+import { PLAN_BY_ID, type PlanId } from "../shared/plans";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -470,9 +470,10 @@ export async function reserveGenerationJob(
   imageIds: number[],
   additionalCheckoutSessionId?: string,
   billingEntitlement?: {
-    usageWindowStart: Date;
+    periodStart: Date;
+    periodEnd: Date;
     enforceAllowance: boolean;
-    allowance?: number;
+    planId?: PlanId;
   }
 ): Promise<GenerationReservation> {
   const database = await getDb();
@@ -532,50 +533,35 @@ export async function reserveGenerationJob(
       return { ok: true, job: created, shouldSubmit: true } as const;
     }
 
-    // Exact current v3 prices enforce a monthly usage window, including annual
-    // subscriptions. Exact v2 prices retain their sold billing-period limits;
-    // exact known v1 prices retain their original unlimited behavior.
+    // Current v2 prices enforce the new limit using the plan classified from
+    // Stripe itself. Exact known v1 prices retain their previously sold access.
     if (billingEntitlement.enforceAllowance) {
-      const allowance = billingEntitlement.allowance;
-      if (!allowance || allowance < 1) {
+      const entitlementPlanId = billingEntitlement.planId;
+      if (!entitlementPlanId) {
         return { ok: false, reason: "period_unavailable" } as const;
       }
-      const [[usage], [adjustment]] = await Promise.all([
-        tx
-          .select({ value: count() })
-          .from(generationJobs)
-          .where(
-            and(
-              eq(generationJobs.userId, job.userId),
-              gte(
-                generationJobs.createdAt,
-                billingEntitlement.usageWindowStart
-              ),
-              sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
-              or(
-                eq(generationJobs.status, "processing"),
-                eq(generationJobs.status, "ready")
-              )
+      const [usage] = await tx
+        .select({ value: count() })
+        .from(generationJobs)
+        .where(
+          and(
+            eq(generationJobs.userId, job.userId),
+            gte(generationJobs.createdAt, billingEntitlement.periodStart),
+            sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+            or(
+              eq(generationJobs.status, "processing"),
+              eq(generationJobs.status, "ready")
             )
-          ),
-        tx
-          .select({
-            value: sql<number>`coalesce(sum(${usageAdjustments.delta}), 0)`,
-          })
-          .from(usageAdjustments)
-          .where(
-            and(
-              eq(usageAdjustments.userId, job.userId),
-              gte(
-                usageAdjustments.createdAt,
-                billingEntitlement.usageWindowStart
-              )
-            )
-          ),
-      ]);
-      const used = Math.max(
+          )
+        );
+      const used = Number(usage?.value ?? 0);
+      const adjustmentApplies =
+        subscription.usageAdjustmentPeriodEnd?.getTime() ===
+        billingEntitlement.periodEnd.getTime();
+      const allowance = Math.max(
         0,
-        Number(usage?.value ?? 0) + Number(adjustment?.value ?? 0)
+        PLAN_BY_ID[entitlementPlanId].includedVideos +
+          (adjustmentApplies ? (subscription.usageAdjustment ?? 0) : 0)
       );
       if (used >= allowance) {
         return { ok: false, reason: "limit_reached", allowance, used } as const;
@@ -665,8 +651,22 @@ export async function upsertSubscription(
   patch: Partial<{
     stripeCustomerId: string;
     stripeSubscriptionId: string;
-    plan: PlanId | "starter" | "pro" | "annual" | "business" | null;
+    plan:
+      | "starter_monthly"
+      | "starter_yearly"
+      | "creator_monthly"
+      | "creator_yearly"
+      | "studio_monthly"
+      | "studio_yearly"
+      | "starter"
+      | "pro"
+      | "annual"
+      | "business"
+      | null;
     status: string;
+    usageAdjustment: number;
+    usageAdjustmentPeriodEnd: Date;
+    currentPeriodStart: Date;
     currentPeriodEnd: Date;
   }>
 ) {
@@ -674,12 +674,27 @@ export async function upsertSubscription(
   if (!db) throw new Error("Database not available");
   const existing = await getSubscription(userId);
   if (existing) {
+    const periodChanged =
+      patch.currentPeriodEnd !== undefined &&
+      existing.currentPeriodEnd?.getTime() !== patch.currentPeriodEnd.getTime();
     await db
       .update(subscriptions)
-      .set(patch)
+      .set({
+        ...patch,
+        ...(periodChanged
+          ? {
+              usageAdjustment: 0,
+              usageAdjustmentPeriodEnd: patch.currentPeriodEnd,
+            }
+          : {}),
+      })
       .where(eq(subscriptions.userId, userId));
   } else {
-    await db.insert(subscriptions).values({ userId, ...patch });
+    await db.insert(subscriptions).values({
+      userId,
+      ...patch,
+      usageAdjustmentPeriodEnd: patch.currentPeriodEnd,
+    });
   }
   return getSubscription(userId);
 }
@@ -720,40 +735,42 @@ export async function getUserById(userId: number) {
   return rows[0];
 }
 
-// ===================== Account/session security & administration =====================
+// ===================== Admin console =====================
 
-export async function changeOwnPassword(userId: number, passwordHash: string) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  const [updated] = await database
-    .update(users)
-    .set({
-      passwordHash,
-      mustChangePassword: false,
-      sessionVersion: sql`${users.sessionVersion} + 1`,
-    })
-    .where(and(eq(users.id, userId), eq(users.accountStatus, "active")))
-    .returning();
-  return updated;
-}
+export type AdminAuditContext = {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+};
 
 export async function listUsersForAdmin(input: {
   page: number;
   pageSize: number;
   search?: string;
+  role?: "all" | "user" | "admin";
+  accountStatus?: "all" | "active" | "disabled";
 }) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  const search = input.search?.trim();
-  const where = search
-    ? or(
-        ilike(users.email, `%${search}%`),
-        ilike(users.name, `%${search}%`),
-        ilike(users.openId, `%${search}%`)
-      )
-    : undefined;
-  const [rows, totals] = await Promise.all([
-    database
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const filters: SQL[] = [];
+  if (input.search) {
+    const pattern = `%${input.search}%`;
+    const search = or(
+      ilike(users.name, pattern),
+      ilike(users.email, pattern),
+      ilike(users.openId, pattern)
+    );
+    if (search) filters.push(search);
+  }
+  if (input.role && input.role !== "all")
+    filters.push(eq(users.role, input.role));
+  if (input.accountStatus === "active") filters.push(isNull(users.disabledAt));
+  if (input.accountStatus === "disabled")
+    filters.push(sql`${users.disabledAt} is not null`);
+  const where = filters.length ? and(...filters) : undefined;
+
+  const [rows, totalRows, overviewRows] = await Promise.all([
+    db
       .select({
         id: users.id,
         openId: users.openId,
@@ -762,13 +779,19 @@ export async function listUsersForAdmin(input: {
         loginMethod: users.loginMethod,
         emailVerified: users.emailVerified,
         role: users.role,
-        accountStatus: users.accountStatus,
-        mustChangePassword: users.mustChangePassword,
+        disabledAt: users.disabledAt,
+        forcePasswordChange: users.forcePasswordChange,
         createdAt: users.createdAt,
         updatedAt: users.updatedAt,
         lastSignedIn: users.lastSignedIn,
-        subscriptionPlan: subscriptions.plan,
+        plan: subscriptions.plan,
         subscriptionStatus: subscriptions.status,
+        currentPeriodStart: subscriptions.currentPeriodStart,
+        currentPeriodEnd: subscriptions.currentPeriodEnd,
+        usageAdjustment: subscriptions.usageAdjustment,
+        usageAdjustmentPeriodEnd: subscriptions.usageAdjustmentPeriodEnd,
+        stripeCustomerId: subscriptions.stripeCustomerId,
+        stripeSubscriptionId: subscriptions.stripeSubscriptionId,
       })
       .from(users)
       .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
@@ -776,18 +799,91 @@ export async function listUsersForAdmin(input: {
       .orderBy(desc(users.createdAt))
       .limit(input.pageSize)
       .offset((input.page - 1) * input.pageSize),
-    database.select({ value: count() }).from(users).where(where),
+    db.select({ value: count() }).from(users).where(where),
+    db
+      .select({
+        total: count(),
+        active: sql<number>`count(*) filter (where ${users.disabledAt} is null)`,
+        disabled: sql<number>`count(*) filter (where ${users.disabledAt} is not null)`,
+        admins: sql<number>`count(*) filter (where ${users.role} = 'admin')`,
+      })
+      .from(users),
   ]);
-  return { rows, total: Number(totals[0]?.value ?? 0) };
+
+  const items = await Promise.all(
+    rows.map(async row => {
+      const periodStart = row.currentPeriodStart;
+      const usageFilters: SQL[] = [
+        eq(generationJobs.userId, row.id),
+        sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+      ];
+      if (periodStart)
+        usageFilters.push(gte(generationJobs.createdAt, periodStart));
+      else usageFilters.push(sql`false`);
+      const [periodUsageRows, totalUsageRows] = await Promise.all([
+        db
+          .select({ value: count() })
+          .from(generationJobs)
+          .where(
+            and(
+              ...usageFilters,
+              or(
+                eq(generationJobs.status, "processing"),
+                eq(generationJobs.status, "ready")
+              )
+            )
+          ),
+        db
+          .select({ value: count() })
+          .from(generationJobs)
+          .where(eq(generationJobs.userId, row.id)),
+      ]);
+      const currentPlan =
+        row.plan && row.plan in PLAN_BY_ID
+          ? PLAN_BY_ID[row.plan as PlanId]
+          : null;
+      return {
+        ...row,
+        usageUsed: Number(periodUsageRows[0]?.value ?? 0),
+        totalGenerated: Number(totalUsageRows[0]?.value ?? 0),
+        usageAllowance: currentPlan
+          ? Math.max(
+              0,
+              currentPlan.includedVideos +
+                (row.currentPeriodEnd &&
+                row.usageAdjustmentPeriodEnd?.getTime() ===
+                  row.currentPeriodEnd.getTime()
+                  ? (row.usageAdjustment ?? 0)
+                  : 0)
+            )
+          : null,
+      };
+    })
+  );
+
+  const total = Number(totalRows[0]?.value ?? 0);
+  const overview = overviewRows[0];
+  return {
+    items,
+    pagination: {
+      page: input.page,
+      pageSize: input.pageSize,
+      total,
+      pageCount: Math.max(1, Math.ceil(total / input.pageSize)),
+    },
+    overview: {
+      total: Number(overview?.total ?? 0),
+      active: Number(overview?.active ?? 0),
+      disabled: Number(overview?.disabled ?? 0),
+      admins: Number(overview?.admins ?? 0),
+    },
+  };
 }
 
-export async function getUserDetailsForAdmin(
-  userId: number,
-  usageWindowStart?: Date
-) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  const [user] = await database
+export async function getUserForAdmin(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
     .select({
       id: users.id,
       openId: users.openId,
@@ -796,297 +892,395 @@ export async function getUserDetailsForAdmin(
       loginMethod: users.loginMethod,
       emailVerified: users.emailVerified,
       role: users.role,
-      accountStatus: users.accountStatus,
-      sessionVersion: users.sessionVersion,
-      mustChangePassword: users.mustChangePassword,
+      disabledAt: users.disabledAt,
+      forcePasswordChange: users.forcePasswordChange,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
       lastSignedIn: users.lastSignedIn,
+      plan: subscriptions.plan,
+      subscriptionStatus: subscriptions.status,
+      currentPeriodStart: subscriptions.currentPeriodStart,
+      currentPeriodEnd: subscriptions.currentPeriodEnd,
+      usageAdjustment: subscriptions.usageAdjustment,
+      usageAdjustmentPeriodEnd: subscriptions.usageAdjustmentPeriodEnd,
+      stripeCustomerId: subscriptions.stripeCustomerId,
+      stripeSubscriptionId: subscriptions.stripeSubscriptionId,
     })
     .from(users)
+    .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
     .where(eq(users.id, userId))
     .limit(1);
-  if (!user) return undefined;
+  if (!row) return undefined;
 
-  const calendarMonthStart = new Date();
-  calendarMonthStart.setUTCDate(1);
-  calendarMonthStart.setUTCHours(0, 0, 0, 0);
-  const windowStart = usageWindowStart ?? calendarMonthStart;
-  const [
-    subscription,
-    totals,
-    windowUsage,
-    adjustment,
-    recentAdjustments,
-    recentAudits,
-  ] = await Promise.all([
-    getSubscription(userId),
-    database
-      .select({ total: count() })
+  const [jobs, jobCounts, projectCounts, imageCounts] = await Promise.all([
+    db
+      .select({
+        id: generationJobs.id,
+        status: generationJobs.status,
+        resolution: generationJobs.resolution,
+        aspectRatio: generationJobs.aspectRatio,
+        createdAt: generationJobs.createdAt,
+      })
       .from(generationJobs)
-      .where(eq(generationJobs.userId, userId)),
-    database
+      .where(eq(generationJobs.userId, userId))
+      .orderBy(desc(generationJobs.createdAt))
+      .limit(8),
+    db
       .select({ value: count() })
       .from(generationJobs)
-      .where(
-        and(
-          eq(generationJobs.userId, userId),
-          gte(generationJobs.createdAt, windowStart),
-          sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
-          or(
-            eq(generationJobs.status, "processing"),
-            eq(generationJobs.status, "ready")
-          )
-        )
-      ),
-    database
-      .select({
-        currentWindow: sql<number>`coalesce(sum(${usageAdjustments.delta}) filter (where ${usageAdjustments.createdAt} >= ${windowStart}), 0)`,
-      })
-      .from(usageAdjustments)
-      .where(eq(usageAdjustments.userId, userId)),
-    database
-      .select()
-      .from(usageAdjustments)
-      .where(eq(usageAdjustments.userId, userId))
-      .orderBy(desc(usageAdjustments.createdAt))
-      .limit(25),
-    database
-      .select()
-      .from(adminAuditLogs)
-      .where(eq(adminAuditLogs.targetUserId, userId))
-      .orderBy(desc(adminAuditLogs.createdAt))
-      .limit(25),
+      .where(eq(generationJobs.userId, userId)),
+    db
+      .select({ value: count() })
+      .from(projects)
+      .where(eq(projects.userId, userId)),
+    db
+      .select({ value: count() })
+      .from(projectImages)
+      .where(eq(projectImages.userId, userId)),
   ]);
-  const adjustmentThisWindow = Number(adjustment[0]?.currentWindow ?? 0);
+  const periodStart = row.currentPeriodStart;
+  const periodFilters: SQL[] = [
+    eq(generationJobs.userId, userId),
+    sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+  ];
+  if (periodStart)
+    periodFilters.push(gte(generationJobs.createdAt, periodStart));
+  else periodFilters.push(sql`false`);
+  const periodUsage = await db
+    .select({ value: count() })
+    .from(generationJobs)
+    .where(
+      and(
+        ...periodFilters,
+        or(
+          eq(generationJobs.status, "processing"),
+          eq(generationJobs.status, "ready")
+        )
+      )
+    );
+  const currentPlan =
+    row.plan && row.plan in PLAN_BY_ID ? PLAN_BY_ID[row.plan as PlanId] : null;
+
   return {
-    user,
-    subscription: subscription ?? null,
-    usage: {
-      total: Number(totals[0]?.total ?? 0),
-      currentWindow: Math.max(
-        0,
-        Number(windowUsage[0]?.value ?? 0) + adjustmentThisWindow
-      ),
-      adjustmentCurrentWindow: adjustmentThisWindow,
-      windowStart,
-    },
-    recentAdjustments,
-    recentAudits,
+    ...row,
+    recentJobs: jobs,
+    totalGenerated: Number(jobCounts[0]?.value ?? 0),
+    projectCount: Number(projectCounts[0]?.value ?? 0),
+    imageCount: Number(imageCounts[0]?.value ?? 0),
+    usageUsed: Number(periodUsage[0]?.value ?? 0),
+    usageAllowance: currentPlan
+      ? Math.max(
+          0,
+          currentPlan.includedVideos +
+            (row.currentPeriodEnd &&
+            row.usageAdjustmentPeriodEnd?.getTime() ===
+              row.currentPeriodEnd.getTime()
+              ? (row.usageAdjustment ?? 0)
+              : 0)
+        )
+      : null,
   };
 }
 
-async function lockAdminMutation(tx: any) {
-  await tx.execute(sql`select pg_advisory_xact_lock(714002)`);
-}
-
-async function assertMayRemoveActiveAdmin(
-  tx: any,
-  target: typeof users.$inferSelect
-) {
-  if (target.role !== "admin" || target.accountStatus !== "active") return;
-  const [remaining] = await tx
-    .select({ value: count() })
-    .from(users)
-    .where(and(eq(users.role, "admin"), eq(users.accountStatus, "active")));
-  if (Number(remaining?.value ?? 0) <= 1) {
-    throw new Error("LAST_ACTIVE_ADMIN");
-  }
-}
-
-async function insertAudit(
-  tx: any,
-  input: {
-    adminId: number;
-    targetUserId?: number;
-    action: string;
-    metadata?: unknown;
-  }
-) {
-  await tx.insert(adminAuditLogs).values({
-    adminId: input.adminId,
-    targetUserId: input.targetUserId,
-    action: input.action,
-    metadata: JSON.stringify(input.metadata ?? {}),
-  });
-}
-
-export async function setUserAccountStatusByAdmin(input: {
-  adminId: number;
-  targetUserId: number;
-  status: "active" | "disabled";
+export async function createAdminAuditLog(input: {
+  actorUserId: number;
+  targetUserId?: number | null;
+  action: string;
+  details: Record<string, unknown>;
+  context?: AdminAuditContext;
 }) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  return database.transaction(async tx => {
-    await lockAdminMutation(tx);
-    const [target] = await tx
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [created] = await db
+    .insert(adminAuditLogs)
+    .values({
+      actorUserId: input.actorUserId,
+      targetUserId: input.targetUserId ?? null,
+      action: input.action,
+      details: JSON.stringify(input.details),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
+    })
+    .returning();
+  return created;
+}
+
+export async function listAdminAuditLogs(input: {
+  page: number;
+  pageSize: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [rows, totals] = await Promise.all([
+    db
       .select()
-      .from(users)
-      .where(eq(users.id, input.targetUserId))
-      .limit(1);
-    if (!target) throw new Error("USER_NOT_FOUND");
-    if (input.adminId === input.targetUserId && input.status === "disabled") {
-      throw new Error("SELF_DISABLE");
+      .from(adminAuditLogs)
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(input.pageSize)
+      .offset((input.page - 1) * input.pageSize),
+    db.select({ value: count() }).from(adminAuditLogs),
+  ]);
+  const usersById = new Map<
+    number,
+    { name: string | null; email: string | null }
+  >();
+  await Promise.all(
+    Array.from(
+      new Set(
+        rows.flatMap(row =>
+          [row.actorUserId, row.targetUserId].filter(
+            (id): id is number => id !== null
+          )
+        )
+      )
+    ).map(async id => {
+      const user = await getUserById(id);
+      usersById.set(id, {
+        name: user?.name ?? null,
+        email: user?.email ?? null,
+      });
+    })
+  );
+  const total = Number(totals[0]?.value ?? 0);
+  return {
+    items: rows.map(row => ({
+      ...row,
+      actor: usersById.get(row.actorUserId) ?? null,
+      target: row.targetUserId
+        ? (usersById.get(row.targetUserId) ?? null)
+        : null,
+    })),
+    pagination: {
+      page: input.page,
+      pageSize: input.pageSize,
+      total,
+      pageCount: Math.max(1, Math.ceil(total / input.pageSize)),
+    },
+  };
+}
+
+async function assertTargetUser(tx: any, targetUserId: number) {
+  const [target] = await tx
+    .select()
+    .from(users)
+    .where(eq(users.id, targetUserId))
+    .limit(1);
+  if (!target) throw new Error("User not found");
+  return target;
+}
+
+export async function setAccountDisabledByAdmin(input: {
+  actorUserId: number;
+  targetUserId: number;
+  disabled: boolean;
+  context?: AdminAuditContext;
+}) {
+  if (input.actorUserId === input.targetUserId) {
+    throw new Error("You cannot disable your own administrator account");
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(81726354)`);
+    const target = await assertTargetUser(tx, input.targetUserId);
+    if (input.disabled && target.role === "admin") {
+      const [admins] = await tx
+        .select({ value: count() })
+        .from(users)
+        .where(and(eq(users.role, "admin"), isNull(users.disabledAt)));
+      if (Number(admins?.value ?? 0) <= 1) {
+        throw new Error("The last active administrator cannot be disabled");
+      }
     }
-    if (input.status === "disabled")
-      await assertMayRemoveActiveAdmin(tx, target);
-    const sessionPatch =
-      input.status === "disabled"
-        ? { sessionVersion: sql`${users.sessionVersion} + 1` }
-        : {};
-    const [updated] = await tx
+    await tx
       .update(users)
-      .set({ accountStatus: input.status, ...sessionPatch })
-      .where(eq(users.id, input.targetUserId))
-      .returning();
-    await insertAudit(tx, {
-      adminId: input.adminId,
+      .set({
+        disabledAt: input.disabled ? new Date() : null,
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+      })
+      .where(eq(users.id, input.targetUserId));
+    await tx.insert(adminAuditLogs).values({
+      actorUserId: input.actorUserId,
       targetUserId: input.targetUserId,
-      action: "user.account_status_changed",
-      metadata: { from: target.accountStatus, to: input.status },
+      action: input.disabled ? "user.disabled" : "user.enabled",
+      details: JSON.stringify({ previousDisabledAt: target.disabledAt }),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
     });
-    return updated;
   });
 }
 
 export async function setUserRoleByAdmin(input: {
-  adminId: number;
+  actorUserId: number;
   targetUserId: number;
   role: "user" | "admin";
+  context?: AdminAuditContext;
 }) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  return database.transaction(async tx => {
-    await lockAdminMutation(tx);
-    const [target] = await tx
-      .select()
-      .from(users)
-      .where(eq(users.id, input.targetUserId))
-      .limit(1);
-    if (!target) throw new Error("USER_NOT_FOUND");
-    if (input.adminId === input.targetUserId && input.role === "user") {
-      throw new Error("SELF_DEMOTION");
+  if (input.actorUserId === input.targetUserId) {
+    throw new Error("You cannot change your own administrator role");
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(81726354)`);
+    const target = await assertTargetUser(tx, input.targetUserId);
+    if (target.role === "admin" && input.role === "user") {
+      const [admins] = await tx
+        .select({ value: count() })
+        .from(users)
+        .where(eq(users.role, "admin"));
+      if (Number(admins?.value ?? 0) <= 1) {
+        throw new Error("The last administrator cannot be demoted");
+      }
     }
-    if (input.role === "user") await assertMayRemoveActiveAdmin(tx, target);
-    const [updated] = await tx
+    await tx
       .update(users)
       .set({
         role: input.role,
         sessionVersion: sql`${users.sessionVersion} + 1`,
       })
-      .where(eq(users.id, input.targetUserId))
-      .returning();
-    await insertAudit(tx, {
-      adminId: input.adminId,
+      .where(eq(users.id, input.targetUserId));
+    await tx.insert(adminAuditLogs).values({
+      actorUserId: input.actorUserId,
       targetUserId: input.targetUserId,
       action: "user.role_changed",
-      metadata: { from: target.role, to: input.role },
+      details: JSON.stringify({ from: target.role, to: input.role }),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
     });
-    return updated;
   });
 }
 
-export async function revokeUserSessionsByAdmin(
-  adminId: number,
-  targetUserId: number
-) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  return database.transaction(async tx => {
-    const [updated] = await tx
-      .update(users)
-      .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
-      .where(eq(users.id, targetUserId))
-      .returning();
-    if (!updated) throw new Error("USER_NOT_FOUND");
-    await insertAudit(tx, {
-      adminId,
-      targetUserId,
-      action: "user.sessions_revoked",
-    });
-    return updated;
-  });
-}
-
-export async function issueTemporaryPasswordByAdmin(input: {
-  adminId: number;
+export async function resetUserPasswordByAdmin(input: {
+  actorUserId: number;
   targetUserId: number;
   passwordHash: string;
+  context?: AdminAuditContext;
 }) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  return database.transaction(async tx => {
-    const [updated] = await tx
+  if (input.actorUserId === input.targetUserId) {
+    throw new Error(
+      "Use your account password screen to change your own password"
+    );
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const target = await assertTargetUser(tx, input.targetUserId);
+    if (!target.email)
+      throw new Error("This account has no email address for password sign-in");
+    const [matchingEmails] = await tx
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.email, target.email));
+    if (Number(matchingEmails?.value ?? 0) !== 1) {
+      throw new Error(
+        "Password reset is unavailable because this email maps to multiple identities"
+      );
+    }
+    await tx
       .update(users)
       .set({
         passwordHash: input.passwordHash,
-        mustChangePassword: true,
+        forcePasswordChange: true,
         sessionVersion: sql`${users.sessionVersion} + 1`,
       })
-      .where(eq(users.id, input.targetUserId))
-      .returning();
-    if (!updated) throw new Error("USER_NOT_FOUND");
-    await insertAudit(tx, {
-      adminId: input.adminId,
+      .where(eq(users.id, input.targetUserId));
+    await tx.insert(adminAuditLogs).values({
+      actorUserId: input.actorUserId,
       targetUserId: input.targetUserId,
-      action: "user.temporary_password_issued",
-      metadata: { mustChangePassword: true },
+      action: "user.password_reset",
+      details: JSON.stringify({ forcedChange: true }),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
     });
-    return updated;
   });
 }
 
-export async function createAdminAudit(input: {
-  adminId: number;
-  targetUserId?: number;
-  action: string;
-  metadata?: unknown;
-}) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  await insertAudit(database, input);
-}
-
-/** Append an auditable usage correction for the user's current usage window. */
-export async function adjustUserUsageByAdmin(input: {
-  adminId: number;
+export async function revokeUserSessionsByAdmin(input: {
+  actorUserId: number;
   targetUserId: number;
-  delta: number;
-  reason: string;
+  context?: AdminAuditContext;
 }) {
-  const database = await getDb();
-  if (!database) throw new Error("Database not available");
-  if (!Number.isInteger(input.delta) || input.delta === 0) {
-    throw new Error("INVALID_USAGE_ADJUSTMENT");
+  if (input.actorUserId === input.targetUserId) {
+    throw new Error(
+      "You cannot revoke your own sessions from the admin console"
+    );
   }
-  return database.transaction(async tx => {
-    const [target] = await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, input.targetUserId))
-      .limit(1);
-    if (!target) throw new Error("USER_NOT_FOUND");
-
-    const [adjustment] = await tx
-      .insert(usageAdjustments)
-      .values({
-        adminId: input.adminId,
-        userId: input.targetUserId,
-        delta: input.delta,
-        reason: input.reason,
-      })
-      .returning();
-    await insertAudit(tx, {
-      adminId: input.adminId,
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await assertTargetUser(tx, input.targetUserId);
+    await tx
+      .update(users)
+      .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
+      .where(eq(users.id, input.targetUserId));
+    await tx.insert(adminAuditLogs).values({
+      actorUserId: input.actorUserId,
       targetUserId: input.targetUserId,
-      action: "user.usage_adjusted",
-      metadata: {
-        adjustmentId: adjustment.id,
-        delta: input.delta,
-        reason: input.reason,
-      },
+      action: "user.sessions_revoked",
+      details: JSON.stringify({ scope: "all" }),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
     });
-    return adjustment;
   });
+}
+
+export async function setUsageAdjustmentByAdmin(input: {
+  actorUserId: number;
+  targetUserId: number;
+  adjustment: number;
+  context?: AdminAuditContext;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await assertTargetUser(tx, input.targetUserId);
+    const [existing] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, input.targetUserId))
+      .limit(1);
+    if (!existing) throw new Error("This user has no subscription record");
+    await tx
+      .update(subscriptions)
+      .set({
+        usageAdjustment: input.adjustment,
+        usageAdjustmentPeriodEnd: existing.currentPeriodEnd,
+      })
+      .where(eq(subscriptions.userId, input.targetUserId));
+    await tx.insert(adminAuditLogs).values({
+      actorUserId: input.actorUserId,
+      targetUserId: input.targetUserId,
+      action: "subscription.usage_adjusted",
+      details: JSON.stringify({
+        from: existing.usageAdjustment,
+        to: input.adjustment,
+      }),
+      ipAddress: input.context?.ipAddress ?? null,
+      userAgent: input.context?.userAgent ?? null,
+    });
+  });
+}
+
+export async function changeOwnPassword(userId: number, passwordHash: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(users)
+    .set({
+      passwordHash,
+      forcePasswordChange: false,
+      sessionVersion: sql`${users.sessionVersion} + 1`,
+    })
+    .where(eq(users.id, userId));
+  return getUserById(userId);
+}
+
+export async function incrementUserSessionVersion(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(users)
+    .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
+    .where(eq(users.id, userId));
 }

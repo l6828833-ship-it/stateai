@@ -27,7 +27,7 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
-  sessionVersion?: number;
+  sessionVersion: number;
 };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
@@ -189,7 +189,7 @@ class SDKServer {
         openId,
         appId: ENV.appId,
         name: options.name || "",
-        sessionVersion: options.sessionVersion,
+        sessionVersion: options.sessionVersion ?? 0,
       },
       options
     );
@@ -204,15 +204,12 @@ class SDKServer {
     const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1000);
     const secretKey = this.getSessionSecret();
 
-    const sessionClaims = {
+    return new SignJWT({
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
-      ...(payload.sessionVersion === undefined
-        ? {}
-        : { sessionVersion: payload.sessionVersion }),
-    };
-    return new SignJWT(sessionClaims)
+      sessionVersion: payload.sessionVersion,
+    })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
@@ -222,7 +219,7 @@ class SDKServer {
     openId: string;
     appId: string;
     name: string;
-    sessionVersion?: number;
+    sessionVersion: number;
   } | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
@@ -242,9 +239,7 @@ class SDKServer {
       if (
         !isNonEmptyString(openId) ||
         !isNonEmptyString(appId) ||
-        !isNonEmptyString(name) ||
-        (sessionVersion !== undefined &&
-          (!Number.isInteger(sessionVersion) || (sessionVersion as number) < 0))
+        !isNonEmptyString(name)
       ) {
         console.warn("[Auth] Session payload missing required fields");
         return null;
@@ -254,9 +249,7 @@ class SDKServer {
         openId,
         appId,
         name,
-        ...(sessionVersion === undefined
-          ? {}
-          : { sessionVersion: sessionVersion as number }),
+        sessionVersion: typeof sessionVersion === "number" ? sessionVersion : 0,
       };
     } catch (error) {
       console.warn("[Auth] Session verification failed", String(error));
@@ -343,16 +336,11 @@ class SDKServer {
     if (!user) {
       throw ForbiddenError("User not found");
     }
-    if (user.accountStatus !== "active") {
-      throw ForbiddenError("Account unavailable");
+    if (user.disabledAt) {
+      throw ForbiddenError("This account has been disabled");
     }
-    const tokenSessionVersion = session.sessionVersion;
-    const validSessionVersion =
-      tokenSessionVersion === undefined
-        ? user.sessionVersion === 0
-        : tokenSessionVersion === user.sessionVersion;
-    if (!validSessionVersion) {
-      throw ForbiddenError("Session revoked");
+    if (session.sessionVersion !== user.sessionVersion) {
+      throw ForbiddenError("This session has been revoked");
     }
 
     await db.upsertUser({
@@ -383,6 +371,7 @@ function buildCronUser(
     email: null,
     loginMethod: null,
     role: "user",
+    sessionVersion: 0,
     createdAt: now,
     updatedAt: now,
     lastSignedIn: now,

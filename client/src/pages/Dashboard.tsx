@@ -20,11 +20,7 @@ import {
   loadDraftWithImages,
   saveDraft,
 } from "@/hooks/useToolDraft";
-import {
-  ADDITIONAL_VIDEO_PRICE_USD,
-  PLAN_BY_ID,
-  type PlanId,
-} from "@shared/plans";
+import type { PlanId } from "@shared/plans";
 import {
   BadgeCheck,
   BarChart3,
@@ -161,10 +157,14 @@ export default function Dashboard() {
 
   // Redirect anonymous visitors to the sign-in page.
   useEffect(() => {
+    if (!authLoading && user?.forcePasswordChange) {
+      navigate("/change-password");
+      return;
+    }
     if (!authLoading && !isAuthenticated) {
       navigate("/login");
     }
-  }, [authLoading, isAuthenticated, navigate]);
+  }, [authLoading, isAuthenticated, navigate, user?.forcePasswordChange]);
 
   useEffect(() => {
     try {
@@ -471,7 +471,6 @@ export default function Dashboard() {
 
   const handleSelectPlan = async (planId: PlanId) => {
     try {
-      // Stripe checkout is wired via the billing router (phase 5).
       const res = await fetch(`/api/billing/checkout?plan=${planId}`, {
         method: "POST",
       });
@@ -488,14 +487,25 @@ export default function Dashboard() {
     }
   };
 
+  // Continue an explicit pricing choice made on the public site after sign-up.
   useEffect(() => {
-    const pendingPlan = sessionStorage.getItem("estatetour_pending_plan");
-    if (!pendingPlan || !(pendingPlan in PLAN_BY_ID)) return;
-    sessionStorage.removeItem("estatetour_pending_plan");
-    void handleSelectPlan(pendingPlan as PlanId);
-    // Checkout is intentionally consumed only once after arriving from public pricing.
+    if (!isAuthenticated) return;
+    let selectedPlan: string | null = null;
+    try {
+      selectedPlan = localStorage.getItem("estatetour_selected_plan");
+      if (selectedPlan) localStorage.removeItem("estatetour_selected_plan");
+    } catch {
+      return;
+    }
+    if (
+      selectedPlan &&
+      /^(starter|creator|studio)_(monthly|yearly)$/.test(selectedPlan)
+    ) {
+      void handleSelectPlan(selectedPlan as PlanId);
+    }
+    // Run once when authentication becomes available; the storage key is removed first.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated]);
 
   const handleBuyAdditionalVideo = async () => {
     if (pendingAdditionalVideo) {
@@ -766,8 +776,9 @@ export default function Dashboard() {
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
                     <Crown className="h-3.5 w-3.5 text-primary" />
                     {currentPlan
-                      ? currentPlan.charAt(0).toUpperCase() +
-                        currentPlan.slice(1)
+                      ? currentPlan
+                          .replaceAll("_", " ")
+                          .replace(/\b\w/g, letter => letter.toUpperCase())
                       : "Active"}{" "}
                     plan
                   </span>
@@ -949,7 +960,7 @@ export default function Dashboard() {
                     onClick={handleBuyAdditionalVideo}
                   >
                     <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Buy additional
-                    video · ${ADDITIONAL_VIDEO_PRICE_USD}
+                    video · $17
                   </Button>
                 ) : (
                   <Button
