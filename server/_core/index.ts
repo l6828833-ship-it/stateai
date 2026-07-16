@@ -16,6 +16,7 @@ import {
   handleWebhook,
 } from "../billing";
 import { sdk } from "./sdk";
+import { checkDatabaseHealth } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -39,6 +40,21 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+
+  // Railway only promotes a deployment after the app and its database are ready.
+  app.get("/api/health", async (_req, res) => {
+    try {
+      await checkDatabaseHealth();
+      res.status(200).json({ status: "ok" });
+    } catch (error) {
+      console.error(
+        "[Health] Database readiness check failed:",
+        error instanceof Error ? error.message : "Unknown database error"
+      );
+      res.status(503).json({ status: "unavailable" });
+    }
+  });
+
   // Stripe webhook needs the RAW body for signature verification —
   // it must be registered BEFORE express.json().
   app.post(
@@ -110,6 +126,12 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError({ error, path, type }) {
+        console.error(`[tRPC] ${type} ${path ?? "unknown"} failed`, {
+          code: error.code,
+          message: error.message,
+        });
+      },
     })
   );
   // development mode uses Vite, production mode uses static files
@@ -134,4 +156,7 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error => {
+  console.error("[Server] Failed to start:", error);
+  process.exitCode = 1;
+});

@@ -40,11 +40,29 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { TRPCClientError } from "@trpc/client";
 
 type DashSection = "overview" | "create" | "videos" | "analytics";
 type PendingAdditionalVideo = { sessionId: string; jobId?: number };
 
 const PENDING_ADDITIONAL_VIDEO_KEY = "estatetour_pending_additional_video";
+const RETRYABLE_QUERY_CODES = new Set([
+  "INTERNAL_SERVER_ERROR",
+  "TIMEOUT",
+  "TOO_MANY_REQUESTS",
+]);
+
+function isRetryableStudioError(error: unknown): boolean {
+  if (!(error instanceof TRPCClientError)) return false;
+  const code = error.data?.code;
+  // A tRPC error without structured data is a transport/parse failure while the
+  // container is starting. Structured errors retry only when explicitly transient.
+  return !code || RETRYABLE_QUERY_CODES.has(code);
+}
+
+function shouldRetryStudioQuery(failureCount: number, error: unknown): boolean {
+  return failureCount < 6 && isRetryableStudioError(error);
+}
 
 function loadPendingAdditionalVideo(): PendingAdditionalVideo | null {
   if (typeof window === "undefined") return null;
@@ -149,9 +167,15 @@ export default function Dashboard() {
 
   const stateQuery = trpc.tour.getState.useQuery(undefined, {
     enabled: isAuthenticated,
+    retry: shouldRetryStudioQuery,
+    retryDelay: failureCount => Math.min(1000 * 2 ** failureCount, 10_000),
+    refetchOnReconnect: true,
   });
   const jobsQuery = trpc.tour.listJobs.useQuery(undefined, {
     enabled: isAuthenticated,
+    retry: shouldRetryStudioQuery,
+    retryDelay: failureCount => Math.min(1000 * 2 ** failureCount, 10_000),
+    refetchOnReconnect: true,
   });
 
   const project = stateQuery.data?.project;
@@ -650,7 +674,7 @@ export default function Dashboard() {
     return (
       <DashboardLoadError
         title="We couldn't load your studio"
-        message="Your project data is temporarily unavailable. Please try again."
+        message="The service may still be starting or the database may be unavailable. We'll keep retrying when the connection returns."
         onRetry={() => void stateQuery.refetch()}
       />
     );
