@@ -21,6 +21,12 @@ export function useAuth(options?: UseAuthOptions) {
     refetchOnWindowFocus: false,
   });
 
+  // A cached unauthenticated result can remain visible while a refetch is in
+  // flight. Route guards must wait for that refetch before deciding to send the
+  // user back to login.
+  const authQueryPending =
+    meQuery.isLoading || (meQuery.isFetching && !meQuery.data);
+
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
       utils.auth.me.setData(undefined, null);
@@ -57,21 +63,21 @@ export function useAuth(options?: UseAuthOptions) {
     );
     return {
       user: meQuery.data ?? null,
-      loading: meQuery.isLoading || logoutMutation.isPending,
+      loading: authQueryPending || logoutMutation.isPending,
       error: meQuery.error ?? logoutMutation.error ?? null,
       isAuthenticated: Boolean(meQuery.data),
     };
   }, [
+    authQueryPending,
     meQuery.data,
     meQuery.error,
-    meQuery.isLoading,
     logoutMutation.error,
     logoutMutation.isPending,
   ]);
 
   useEffect(() => {
     if (!redirectOnUnauthenticated) return;
-    if (meQuery.isLoading || logoutMutation.isPending) return;
+    if (authQueryPending || logoutMutation.isPending) return;
     if (state.user) return;
     if (typeof window === "undefined") return;
     if (redirectPath && window.location.pathname === redirectPath) return;
@@ -83,10 +89,10 @@ export function useAuth(options?: UseAuthOptions) {
       startLogin();
     }
   }, [
+    authQueryPending,
     redirectOnUnauthenticated,
     redirectPath,
     logoutMutation.isPending,
-    meQuery.isLoading,
     state.user,
   ]);
 
