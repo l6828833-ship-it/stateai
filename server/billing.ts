@@ -55,7 +55,21 @@ type VersionedPlanContract = {
   additionalVideoPriceUsd: number;
 };
 
-/** Immutable v4 contracts: future catalog edits must use a new price version. */
+/** Immutable v5 contracts introduced after the v4 catalog was sold. */
+const V5_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, VersionedPlanContract>> =
+  Object.freeze({
+    estatetour_starter_monthly_v5: {
+      planId: "starter_monthly",
+      amount: 3900,
+      interval: "month",
+      includedVideos: 3,
+      maxImages: 6,
+      maxDurationSeconds: 15,
+      additionalVideoPriceUsd: 17,
+    },
+  });
+
+/** Immutable v4 contracts remain valid for subscriptions already sold. */
 const V4_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, VersionedPlanContract>> =
   Object.freeze({
     estatetour_starter_monthly_v4: {
@@ -112,6 +126,16 @@ const V4_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, VersionedPlanContract>> =
       maxDurationSeconds: 30,
       additionalVideoPriceUsd: 10,
     },
+  });
+
+const CURRENT_PRICE_LOOKUP_BY_PLAN: Readonly<Record<PlanId, string>> =
+  Object.freeze({
+    starter_monthly: "estatetour_starter_monthly_v5",
+    starter_yearly: "estatetour_starter_yearly_v4",
+    creator_monthly: "estatetour_creator_monthly_v4",
+    creator_yearly: "estatetour_creator_yearly_v4",
+    studio_monthly: "estatetour_studio_monthly_v4",
+    studio_yearly: "estatetour_studio_yearly_v4",
   });
 
 /** Immutable v3 contracts: never derive these sold terms from today's catalog. */
@@ -225,19 +249,21 @@ export function classifyGenerationPrice(
   price: Stripe.Price
 ): ClassifiedGenerationPrice | null {
   const lookupKey = price.lookup_key ?? "";
-  const current = V4_PRICE_BY_LOOKUP_KEY[lookupKey];
-  if (current) {
+  const versioned =
+    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ??
+    V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+  if (versioned) {
     // Archived prices remain valid for subscriptions that already bought them;
     // `active` controls new purchases, not existing entitlements.
-    return isExactRecurringPrice(price, current, false)
+    return isExactRecurringPrice(price, versioned, false)
       ? {
-          storedPlanId: current.planId,
-          planId: current.planId,
+          storedPlanId: versioned.planId,
+          planId: versioned.planId,
           enforceAllowance: true,
-          includedVideos: current.includedVideos,
-          maxImages: current.maxImages,
-          maxDurationSeconds: current.maxDurationSeconds,
-          additionalVideoPriceUsd: current.additionalVideoPriceUsd,
+          includedVideos: versioned.includedVideos,
+          maxImages: versioned.maxImages,
+          maxDurationSeconds: versioned.maxDurationSeconds,
+          additionalVideoPriceUsd: versioned.additionalVideoPriceUsd,
         }
       : null;
   }
@@ -325,8 +351,10 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
 
   const stripe = getStripe();
   const plan = PLAN_BY_ID[planId];
-  const lookupKey = `estatetour_${planId}_v4`;
-  const contract = V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+  const lookupKey = CURRENT_PRICE_LOOKUP_BY_PLAN[planId];
+  const contract =
+    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ??
+    V4_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (
     !contract ||
     contract.amount !== plan.price * 100 ||

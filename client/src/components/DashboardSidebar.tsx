@@ -104,8 +104,8 @@ export default function DashboardSidebar({
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col overflow-x-hidden border-r border-white/10 bg-zinc-950 text-white shadow-2xl shadow-black/15 transition-[width,transform] duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
-          desktopCollapsed ? "lg:w-0 lg:border-r-0" : "lg:w-72",
+          "fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col overflow-x-hidden border-r border-white/10 bg-zinc-950 text-white shadow-2xl shadow-black/15 transition-[width,transform] duration-300 lg:sticky lg:inset-y-auto lg:top-0 lg:h-dvh lg:self-start lg:translate-x-0",
+          desktopCollapsed ? "lg:w-20" : "lg:w-72",
           isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -122,7 +122,7 @@ export default function DashboardSidebar({
           className={cn(
             "relative flex h-16 shrink-0 items-center px-5",
             desktopCollapsed
-              ? "justify-between lg:justify-center lg:px-2"
+              ? "justify-between lg:px-1"
               : "justify-between"
           )}
         >
@@ -139,10 +139,7 @@ export default function DashboardSidebar({
           <button
             type="button"
             onClick={onToggleDesktop}
-            className={cn(
-              "hidden rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:inline-flex",
-              desktopCollapsed && "absolute -right-3 top-5 z-10 border border-white/10 bg-zinc-950 shadow-lg"
-            )}
+            className="hidden rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:inline-flex"
             aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -268,32 +265,32 @@ export default function DashboardSidebar({
           <div className={cn(desktopCollapsed && "lg:hidden")}>
             {/* Quick Stats */}
             <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
-            Quick stats
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { label: "Ready", value: stats.readyCount, icon: Film },
-              {
-                label: "Rendering",
-                value: stats.processingCount,
-                icon: Sparkles,
-              },
-              { label: "Total", value: stats.totalJobs, icon: BarChart3 },
-            ].map(s => (
-              <div
-                key={s.label}
-                className="flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 py-3 text-center"
-              >
-                <s.icon className="h-3.5 w-3.5 text-white/60" />
-                <span className="text-lg font-semibold leading-none text-white">
-                  {s.value}
-                </span>
-                <span className="text-[10px] text-white/50">
-                  {s.label}
-                </span>
-              </div>
-            ))}
-          </div>
+              Quick stats
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: "Ready", value: stats.readyCount, icon: Film },
+                {
+                  label: "Rendering",
+                  value: stats.processingCount,
+                  icon: Sparkles,
+                },
+                { label: "Total", value: stats.totalJobs, icon: BarChart3 },
+              ].map(s => (
+                <div
+                  key={s.label}
+                  className="flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 py-3 text-center"
+                >
+                  <s.icon className="h-3.5 w-3.5 text-white/60" />
+                  <span className="text-lg font-semibold leading-none text-white">
+                    {s.value}
+                  </span>
+                  <span className="text-[10px] text-white/50">
+                    {s.label}
+                  </span>
+                </div>
+              ))}
+            </div>
 
           {/* Subscription / Upgrade card */}
           <div className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4">
