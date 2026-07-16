@@ -48,6 +48,25 @@ export async function getDb() {
   return _db;
 }
 
+/** Verify that the deployment can reach Postgres with the complete app schema. */
+export async function checkDatabaseHealth(): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DATABASE_URL is not configured");
+  await db.execute(sql`select 1`);
+  // Full zero-row projections make Postgres resolve every mapped column without
+  // reading customer data. A missing migration therefore keeps Railway from
+  // promoting a container that cannot serve auth, studio, billing, or admin.
+  await Promise.all([
+    db.select().from(users).limit(0),
+    db.select().from(authCodes).limit(0),
+    db.select().from(projects).limit(0),
+    db.select().from(projectImages).limit(0),
+    db.select().from(generationJobs).limit(0),
+    db.select().from(subscriptions).limit(0),
+    db.select().from(adminAuditLogs).limit(0),
+  ]);
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
@@ -634,6 +653,42 @@ export async function listProcessingJobs(userId: number) {
 }
 
 // ===================== Subscriptions =====================
+
+export type SubscriptionAccess = {
+  plan: PlanId | "starter" | "pro" | "annual" | "business" | null;
+  subscribed: boolean;
+};
+
+/**
+ * Minimal subscription read for dashboard startup. Selecting only access fields
+ * keeps the studio available while a newly deployed checkout migration settles.
+ */
+export async function getSubscriptionAccess(
+  userId: number
+): Promise<SubscriptionAccess> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [subscription] = await db
+    .select({
+      plan: subscriptions.plan,
+      status: subscriptions.status,
+      currentPeriodEnd: subscriptions.currentPeriodEnd,
+    })
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId))
+    .limit(1);
+
+  if (!subscription) return { plan: null, subscribed: false };
+  const statusActive =
+    subscription.status === "active" || subscription.status === "trialing";
+  const periodActive =
+    !subscription.currentPeriodEnd ||
+    subscription.currentPeriodEnd.getTime() >= Date.now() - 24 * 3600 * 1000;
+  return {
+    plan: subscription.plan,
+    subscribed: statusActive && periodActive,
+  };
+}
 
 export async function getSubscription(userId: number) {
   const db = await getDb();

@@ -377,20 +377,21 @@ export const tourRouter = router({
         aspectRatio: "16:9",
       });
     }
-    const images = await db.getProjectImages(project.id, ctx.user.id);
+    const [images, subscription] = await Promise.all([
+      db.getProjectImages(project.id, ctx.user.id),
+      db.getSubscriptionAccess(ctx.user.id),
+    ]);
     const clientImages = await Promise.all(
       images.map(async image => ({
         ...image,
         url: (await signStoredMediaUrl(image.url)) ?? image.url,
       }))
     );
-    const subscribed = await db.hasActiveSubscription(ctx.user.id);
-    const subscription = await db.getSubscription(ctx.user.id);
     return {
       project,
       images: clientImages,
-      subscribed,
-      plan: subscription?.plan ?? null,
+      subscribed: subscription.subscribed,
+      plan: subscription.plan,
     };
   }),
 
@@ -944,11 +945,13 @@ export const tourRouter = router({
 
   /** All of the user's jobs, newest first (history view). */
   listJobs: appProcedure.query(async ({ ctx }) => {
-    const [jobs, subscribed] = await Promise.all([
+    const [jobs, subscription] = await Promise.all([
       db.listGenerationJobs(ctx.user.id),
-      db.hasActiveSubscription(ctx.user.id),
+      db.getSubscriptionAccess(ctx.user.id),
     ]);
-    return Promise.all(jobs.map(job => toClientJobWithMedia(job, subscribed)));
+    return Promise.all(
+      jobs.map(job => toClientJobWithMedia(job, subscription.subscribed))
+    );
   }),
 
   /** Signed download URL for a ready video — subscription required. */
