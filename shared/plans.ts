@@ -64,7 +64,7 @@ function featuresForTier(tier: PlanTier, interval: BillingInterval): string[] {
   const config = TIER_CONFIG[tier];
   const allowance =
     interval === "year"
-      ? `${config.videos} videos per month (${config.videos * 12} per annual billing period)`
+      ? `${config.videos * 12} videos per year`
       : `${config.videos} videos per month`;
   return [
     allowance,
