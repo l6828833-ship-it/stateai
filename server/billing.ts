@@ -1,10 +1,10 @@
 import Stripe from "stripe";
 import type { Request, Response } from "express";
 import {
-  ADDITIONAL_VIDEO_LOOKUP_KEY,
   ADDITIONAL_VIDEO_PRICE_USD,
   PLAN_BY_ID,
   PLANS,
+  isPlanId,
   type PlanId,
 } from "@shared/plans";
 import * as db from "./db";
@@ -32,64 +32,21 @@ type LegacyPlanId = "starter" | "annual" | "pro" | "business";
 type StoredPlanId = PlanId | LegacyPlanId;
 type RecurringInterval = "month" | "year";
 
-type ClassifiedGenerationPrice =
-  | {
-      planId: PlanId;
-      enforceAllowance: true;
-      allowance: number;
-      usageWindow: "anchored_month";
-    }
-  | {
-      planId: "annual" | "pro";
-      enforceAllowance: true;
-      allowance: number;
-      usageWindow: "stripe_period";
-    }
-  | {
-      planId: LegacyPlanId;
-      enforceAllowance: false;
-      usageWindow: "stripe_period";
-    };
-
 const CURRENT_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, PlanId>> =
   Object.freeze(
-    Object.fromEntries(PLANS.map(plan => [plan.lookupKey, plan.id])) as Record<
-      string,
-      PlanId
-    >
+    Object.fromEntries(
+      PLANS.map(plan => [`estatetour_${plan.id}_v3`, plan.id])
+    ) as Record<string, PlanId>
   );
 
-const LEGACY_V2_PRICE_BY_LOOKUP_KEY: Readonly<
-  Record<
-    string,
-    {
-      planId: "annual" | "pro";
-      amount: number;
-      interval: RecurringInterval;
-      allowance: number;
-    }
-  >
-> = Object.freeze({
-  estatetour_annual_v2: {
-    planId: "annual",
-    amount: 2900,
-    interval: "year",
-    allowance: 36,
-  },
-  estatetour_pro_v2: {
-    planId: "pro",
-    amount: 3900,
-    interval: "month",
-    allowance: 3,
-  },
-});
-
-const LEGACY_V1_PRICE_BY_LOOKUP_KEY: Readonly<
+const LEGACY_PRICE_BY_LOOKUP_KEY: Readonly<
   Record<
     string,
     { planId: LegacyPlanId; amount: number; interval: RecurringInterval }
   >
 > = Object.freeze({
+  estatetour_annual_v2: { planId: "annual", amount: 2900, interval: "year" },
+  estatetour_pro_v2: { planId: "pro", amount: 3900, interval: "month" },
   estatetour_starter_v1: { planId: "starter", amount: 900, interval: "month" },
   estatetour_annual_v1: { planId: "annual", amount: 2900, interval: "year" },
   estatetour_pro_v1: { planId: "pro", amount: 3900, interval: "month" },
@@ -109,6 +66,7 @@ function isExactRecurringPrice(
     (!requireActive || price.active) &&
     price.type === "recurring" &&
     price.billing_scheme === "per_unit" &&
+    price.transform_quantity === null &&
     price.currency === "usd" &&
     price.unit_amount === expected.amount &&
     price.recurring?.interval === expected.interval &&
@@ -125,7 +83,7 @@ function isExactPlanPrice(
   const plan = PLAN_BY_ID[planId];
   return isExactRecurringPrice(
     price,
-    { amount: plan.totalPrice * 100, interval: plan.interval },
+    { amount: plan.price * 100, interval: plan.interval },
     requireActive
   );
 }
@@ -133,46 +91,29 @@ function isExactPlanPrice(
 /** Classify only exact prices created by known versions of this application. */
 export function classifyGenerationPrice(
   price: Stripe.Price
-): ClassifiedGenerationPrice | null {
+):
+  | { planId: PlanId; enforceAllowance: true }
+  | { planId: LegacyPlanId; enforceAllowance: false }
+  | null {
   const lookupKey = price.lookup_key ?? "";
   const currentPlanId = CURRENT_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (currentPlanId) {
-    const plan = PLAN_BY_ID[currentPlanId];
+    // Archived prices remain valid for subscriptions that already bought them;
+    // `active` controls new purchases, not existing entitlements.
     return isExactPlanPrice(price, currentPlanId, false)
-      ? {
-          planId: currentPlanId,
-          enforceAllowance: true,
-          allowance: plan.includedVideos,
-          usageWindow: "anchored_month",
-        }
+      ? { planId: currentPlanId, enforceAllowance: true }
       : null;
   }
 
-  const legacyV2 = LEGACY_V2_PRICE_BY_LOOKUP_KEY[lookupKey];
-  if (legacyV2) {
-    return isExactRecurringPrice(price, legacyV2, false)
-      ? {
-          planId: legacyV2.planId,
-          enforceAllowance: true,
-          allowance: legacyV2.allowance,
-          usageWindow: "stripe_period",
-        }
-      : null;
-  }
-
-  const legacyV1 = LEGACY_V1_PRICE_BY_LOOKUP_KEY[lookupKey];
-  if (!legacyV1) return null;
-  // Archived legacy prices remain valid only for subscriptions that already
-  // purchased them; `active` controls new Stripe purchases, not entitlement.
-  return isExactRecurringPrice(price, legacyV1, false)
-    ? {
-        planId: legacyV1.planId,
-        enforceAllowance: false,
-        usageWindow: "stripe_period",
-      }
+  const legacy = LEGACY_PRICE_BY_LOOKUP_KEY[lookupKey];
+  if (!legacy) return null;
+  return isExactRecurringPrice(price, legacy, false)
+    ? { planId: legacy.planId, enforceAllowance: false }
     : null;
 }
 
+const ADDITIONAL_VIDEO_LOOKUP_KEY =
+  "estatetour_additional_video_v3" as const;
 const LEGACY_ADDITIONAL_VIDEO_LOOKUP_KEY =
   "estatetour_additional_video_v2" as const;
 const LEGACY_ADDITIONAL_VIDEO_PRICE_CENTS = 1500;
@@ -186,6 +127,7 @@ function isExactOneTimePrice(
     (!requireActive || price.active) &&
     price.type === "one_time" &&
     price.billing_scheme === "per_unit" &&
+    price.transform_quantity === null &&
     price.currency === "usd" &&
     price.unit_amount === amount &&
     price.recurring === null
@@ -196,11 +138,7 @@ function isExactAdditionalVideoPrice(price: Stripe.Price): boolean {
   return isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_CENTS, true);
 }
 
-/**
- * Recognize exact completed add-on purchases from both the current $17 price
- * and the retired $15 price. Retired prices are redemption-only: checkout
- * always uses the current active v3 price.
- */
+/** Recognize exact current and legacy add-on prices for redemption only. */
 export function recognizedAdditionalVideoAmount(
   price: Stripe.Price
 ): number | null {
@@ -225,7 +163,7 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
 
   const stripe = getStripe();
   const plan = PLAN_BY_ID[planId];
-  const lookupKey = plan.lookupKey;
+  const lookupKey = `estatetour_${planId}_v3`;
 
   const existing = await stripe.prices.list({
     lookup_keys: [lookupKey],
@@ -246,7 +184,7 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
   });
   const price = await stripe.prices.create({
     product: product.id,
-    unit_amount: plan.totalPrice * 100,
+    unit_amount: plan.price * 100,
     currency: "usd",
     recurring: { interval: plan.interval },
     lookup_key: lookupKey,
@@ -281,7 +219,7 @@ async function ensureAdditionalVideoPrice(): Promise<string> {
 
   const product = await stripe.products.create({
     name: "EstateTour AI — Additional video",
-    description: "One additional high-quality 1080p cinematic video",
+    description: `One additional high-quality 1080p cinematic video for $${ADDITIONAL_VIDEO_PRICE_USD}`,
     metadata: { purchase_type: "additional_video" },
   });
   const price = await stripe.prices.create({
@@ -301,8 +239,12 @@ async function ensureAdditionalVideoPrice(): Promise<string> {
   return price.id;
 }
 
-function isPlanId(v: string): v is PlanId {
-  return PLANS.some(p => p.id === v);
+function isCurrentPlanId(value: string): value is PlanId {
+  return isPlanId(value);
+}
+
+function isTerminalSubscriptionStatus(status: Stripe.Subscription.Status) {
+  return status === "canceled" || status === "incomplete_expired";
 }
 
 function getOrigin(req: Request): string {
@@ -314,7 +256,7 @@ function getOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
-/** POST /api/billing/checkout?plan=<current PlanId> — requires authentication. */
+/** POST /api/billing/checkout?plan=<tier>_<interval> — requires authentication. */
 export async function handleCheckout(
   req: Request,
   res: Response,
@@ -322,7 +264,7 @@ export async function handleCheckout(
 ) {
   try {
     const planParam = String(req.query.plan ?? "");
-    if (!isPlanId(planParam)) {
+    if (!isCurrentPlanId(planParam)) {
       res.status(400).json({ error: "Unknown plan" });
       return;
     }
@@ -331,22 +273,23 @@ export async function handleCheckout(
     const origin = getOrigin(req);
 
     const existingSub = await db.getSubscription(user.id);
-    let verifiedTerminalSubscriptionId: string | null = null;
+    let checkoutCustomerId = existingSub?.stripeCustomerId ?? null;
 
-    // A Checkout Session always creates a new subscription. Ask Stripe for the
-    // authoritative state whenever a prior subscription id exists: every
-    // recoverable state (active, trialing, past_due, unpaid, incomplete, or
-    // paused) goes to the portal, while only terminal canceled or
-    // incomplete-expired subscriptions may start over.
+    // Checkout always creates a new subscription. Resolve the Stripe customer
+    // from the stored subscription when needed, then inspect every subscription
+    // for that customer rather than trusting one potentially stale local row.
     if (existingSub?.stripeSubscriptionId) {
-      let existingStripeSubscription: Stripe.Subscription;
       try {
-        existingStripeSubscription = await stripe.subscriptions.retrieve(
+        const stripeSubscription = await stripe.subscriptions.retrieve(
           existingSub.stripeSubscriptionId
         );
+        checkoutCustomerId =
+          typeof stripeSubscription.customer === "string"
+            ? stripeSubscription.customer
+            : stripeSubscription.customer.id;
       } catch (error) {
         console.error(
-          "[Billing] Refusing a new checkout because the existing Stripe subscription could not be verified:",
+          "[Billing] Refusing checkout because the existing Stripe subscription could not be verified:",
           error
         );
         res.status(409).json({
@@ -355,43 +298,163 @@ export async function handleCheckout(
         });
         return;
       }
+    }
 
-      const terminal =
-        existingStripeSubscription.status === "canceled" ||
-        existingStripeSubscription.status === "incomplete_expired";
-      if (!terminal) {
-        if (!existingSub.stripeCustomerId) {
-          res.status(409).json({
-            error:
-              "An existing subscription already exists. Contact support to manage it safely.",
-          });
-          return;
-        }
+    if (checkoutCustomerId) {
+      let customerSubscriptions: Stripe.ApiList<Stripe.Subscription>;
+      try {
+        customerSubscriptions = await stripe.subscriptions.list({
+          customer: checkoutCustomerId,
+          status: "all",
+          limit: 100,
+        });
+      } catch (error) {
+        console.error(
+          "[Billing] Refusing checkout because Stripe customer subscriptions could not be verified:",
+          error
+        );
+        res.status(409).json({
+          error:
+            "Your billing account could not be verified. Open billing or contact support before starting another plan.",
+        });
+        return;
+      }
+
+      // Fail closed instead of overlooking additional subscriptions on another
+      // page. More than 100 subscriptions requires manual support review.
+      if (customerSubscriptions.has_more) {
+        res.status(409).json({
+          error:
+            "Your billing history requires support review before starting another plan.",
+        });
+        return;
+      }
+
+      if (
+        customerSubscriptions.data.some(
+          subscription => !isTerminalSubscriptionStatus(subscription.status)
+        )
+      ) {
         const portal = await stripe.billingPortal.sessions.create({
-          customer: existingSub.stripeCustomerId,
+          customer: checkoutCustomerId,
           return_url: `${origin}/dashboard`,
         });
         res.json({ url: portal.url, existingSubscription: true });
         return;
       }
-      verifiedTerminalSubscriptionId = existingStripeSubscription.id;
-    }
-
-    // Reserve checkout creation under a database advisory lock. Concurrent
-    // requests cannot create two completable sessions before Stripe webhooks
-    // update the local subscription row.
-    const reservation = await db.reserveSubscriptionCheckout(
-      user.id,
-      verifiedTerminalSubscriptionId
-    );
-    if (!reservation.ok) {
+    } else if (
+      existingSub &&
+      !["inactive", "canceled", "incomplete_expired"].includes(
+        existingSub.status
+      )
+    ) {
       res.status(409).json({
         error:
-          reservation.reason === "checkout_pending"
-            ? "A subscription checkout is already in progress. Complete it or try again in about 40 minutes."
-            : "An existing subscription must be managed before starting another plan.",
+          "Your existing subscription could not be verified. Contact support before starting another plan.",
       });
       return;
+    }
+
+    let reservation = await db.reserveSubscriptionCheckout(user.id, planParam);
+    if (!reservation.created) {
+      if (reservation.sessionId) {
+        let existingSession: Stripe.Checkout.Session;
+        try {
+          existingSession = await stripe.checkout.sessions.retrieve(
+            reservation.sessionId
+          );
+        } catch (error) {
+          console.error(
+            "[Billing] Existing checkout reservation could not be reconciled:",
+            error
+          );
+          res.status(409).json({
+            error:
+              "An existing checkout could not be verified. Contact support before starting another plan.",
+          });
+          return;
+        }
+
+        const belongsToReservation =
+          existingSession.client_reference_id === user.id.toString() &&
+          existingSession.metadata?.checkout_reservation_key ===
+            reservation.key;
+        if (!belongsToReservation) {
+          res.status(409).json({
+            error:
+              "An existing checkout could not be matched to this reservation. Contact support before retrying.",
+          });
+          return;
+        }
+
+        if (existingSession.status === "open") {
+          if (reservation.planId !== planParam) {
+            res.status(409).json({
+              error:
+                "A checkout for another plan is already open. Complete it or wait for it to expire.",
+            });
+            return;
+          }
+          res.json({ url: existingSession.url, existingCheckout: true });
+          return;
+        }
+        if (existingSession.status === "complete") {
+          const subscriptionRef = existingSession.subscription;
+          if (!subscriptionRef) {
+            res.status(409).json({
+              error:
+                "A completed checkout could not be reconciled automatically. Contact support before retrying.",
+            });
+            return;
+          }
+          const completedSubscription =
+            typeof subscriptionRef === "string"
+              ? await stripe.subscriptions.retrieve(subscriptionRef)
+              : subscriptionRef;
+          await syncSubscriptionToDb(completedSubscription);
+          await db.clearSubscriptionCheckoutReservation(
+            user.id,
+            reservation.key
+          );
+          res.json({
+            url: `${origin}/dashboard?checkout=processing`,
+            existingCheckout: true,
+          });
+          return;
+        }
+
+        const replaced = await db.replaceSubscriptionCheckoutReservation(
+          user.id,
+          reservation.key,
+          planParam
+        );
+        if (!replaced) {
+          res.status(409).json({
+            error: "Checkout state changed. Please try again.",
+          });
+          return;
+        }
+        reservation = replaced;
+      } else if (db.canReplaceAmbiguousCheckoutReservation(reservation)) {
+        const replaced = await db.replaceSubscriptionCheckoutReservation(
+          user.id,
+          reservation.key,
+          planParam
+        );
+        if (!replaced) {
+          res.status(409).json({
+            error: "Checkout state changed. Please try again.",
+          });
+          return;
+        }
+        reservation = replaced;
+      } else if (reservation.planId !== planParam) {
+        res.status(409).json({
+          error:
+            "A checkout for another plan may already be in progress. Try again later or contact support.",
+        });
+        return;
+      }
     }
 
     try {
@@ -401,32 +464,40 @@ export async function handleCheckout(
           line_items: [{ price: priceId, quantity: 1 }],
           allow_promotion_codes: true,
           client_reference_id: user.id.toString(),
-          customer: existingSub?.stripeCustomerId || undefined,
-          customer_email: existingSub?.stripeCustomerId
+          customer: checkoutCustomerId || undefined,
+          customer_email: checkoutCustomerId
             ? undefined
             : (user.email ?? undefined),
           metadata: {
             user_id: user.id.toString(),
-            customer_email: user.email ?? "",
-            customer_name: user.name ?? "",
             plan_id: planParam,
+            checkout_reservation_key: reservation.key,
           },
           subscription_data: {
-            metadata: { user_id: user.id.toString(), plan_id: planParam },
+            metadata: {
+              user_id: user.id.toString(),
+              plan_id: planParam,
+              checkout_reservation_key: reservation.key,
+            },
           },
-          // Checkout expires five minutes before its reservation. The margin
-          // keeps Stripe's minimum 30-minute lifetime valid after request
-          // processing while preventing overlap with a later reservation.
-          expires_at: Math.floor((Date.now() + 35 * 60 * 1000) / 1000),
+          expires_at: Math.floor(reservation.expiresAt.getTime() / 1000),
           success_url: `${origin}/dashboard?checkout=success`,
           cancel_url: `${origin}/dashboard?checkout=cancelled`,
         },
-        {
-          // Derived from the durable reservation timestamp. Stripe returns the
-          // same Session if this request is retried after an ambiguous failure.
-          idempotencyKey: `subscription_checkout_${user.id}_${reservation.reservedAt.getTime()}`,
-        }
+        { idempotencyKey: reservation.key }
       );
+      const ownsReservation = await db.storeSubscriptionCheckoutSession(
+        user.id,
+        reservation.key,
+        session.id
+      );
+      if (!ownsReservation) {
+        res.status(409).json({
+          error:
+            "Checkout state changed while the session was created. Please contact support before retrying.",
+        });
+        return;
+      }
       res.json({ url: session.url });
     } catch (error) {
       const definitelyNotCreated =
@@ -434,15 +505,10 @@ export async function handleCheckout(
         error instanceof Stripe.errors.StripeAuthenticationError ||
         error instanceof Stripe.errors.StripePermissionError;
       if (definitelyNotCreated) {
-        await db.releaseSubscriptionCheckout(
-          user.id,
-          reservation.reservedAt,
-          reservation.previousStatus
-        );
+        await db.releaseSubscriptionCheckout(user.id, reservation.key);
       } else {
-        // Connection/API failures are ambiguous: Stripe may have created the
-        // Session. Keep the reservation until after that Session's expiration
-        // rather than risk creating a duplicate subscription.
+        // Ambiguous failures retain the key. A same-plan retry reuses Stripe's
+        // idempotency result instead of risking a second subscription.
         console.warn(
           "[Billing] Keeping checkout reservation after ambiguous Stripe failure"
         );
@@ -455,7 +521,7 @@ export async function handleCheckout(
   }
 }
 
-/** Create a one-time $17 checkout for one additional generation. */
+/** Create a one-time additional-video checkout. */
 export async function handleAdditionalVideoCheckout(
   req: Request,
   res: Response,
@@ -506,69 +572,12 @@ export async function handleAdditionalVideoCheckout(
   }
 }
 
-function daysInUtcMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-}
-
-/**
- * Return the latest monthly anniversary at or before `asOf`, preserving the
- * subscription's UTC day/time and clamping short months to their final day.
- * Every boundary is calculated directly from the original anchor, so a
- * January 31 subscription does not drift after February.
- */
-export function getAnchoredMonthlyUsageWindowStart(
-  periodStart: Date,
-  asOf: Date = new Date()
-): Date | null {
-  const anchorMs = periodStart.getTime();
-  const asOfMs = asOf.getTime();
-  if (
-    !Number.isFinite(anchorMs) ||
-    !Number.isFinite(asOfMs) ||
-    asOfMs < anchorMs
-  ) {
-    return null;
-  }
-
-  const anchoredMonth = (monthOffset: number): Date => {
-    const absoluteMonth =
-      periodStart.getUTCFullYear() * 12 +
-      periodStart.getUTCMonth() +
-      monthOffset;
-    const year = Math.floor(absoluteMonth / 12);
-    const month = absoluteMonth - year * 12;
-    const day = Math.min(periodStart.getUTCDate(), daysInUtcMonth(year, month));
-    return new Date(
-      Date.UTC(
-        year,
-        month,
-        day,
-        periodStart.getUTCHours(),
-        periodStart.getUTCMinutes(),
-        periodStart.getUTCSeconds(),
-        periodStart.getUTCMilliseconds()
-      )
-    );
-  };
-
-  let monthOffset =
-    (asOf.getUTCFullYear() - periodStart.getUTCFullYear()) * 12 +
-    asOf.getUTCMonth() -
-    periodStart.getUTCMonth();
-  let candidate = anchoredMonth(monthOffset);
-  if (candidate.getTime() > asOfMs) {
-    monthOffset -= 1;
-    candidate = anchoredMonth(monthOffset);
-  }
-  return candidate;
-}
-
-/** Return a fail-closed Stripe entitlement and its exact usage-window start. */
+/** Return Stripe's exact period and a fail-closed classification of its price. */
 export async function getStripeGenerationEntitlement(userId: number): Promise<{
-  usageWindowStart: Date;
+  periodStart: Date;
+  periodEnd: Date;
   enforceAllowance: boolean;
-  allowance?: number;
-  planId: StoredPlanId;
+  planId?: PlanId;
 } | null> {
   const stored = await db.getSubscription(userId);
   if (!stored?.stripeSubscriptionId) return null;
@@ -582,27 +591,25 @@ export async function getStripeGenerationEntitlement(userId: number): Promise<{
   if (subscription.items.data.length !== 1) return null;
 
   const item = subscription.items.data[0];
-  if (!item || item.quantity !== 1 || !item.current_period_start) return null;
+  if (
+    !item ||
+    item.quantity !== 1 ||
+    !item.current_period_start ||
+    !item.current_period_end
+  )
+    return null;
 
   const classified = classifyGenerationPrice(item.price);
   if (!classified) return null;
-
-  const stripePeriodStart = new Date(item.current_period_start * 1000);
-  const usageWindowStart =
-    classified.usageWindow === "anchored_month"
-      ? getAnchoredMonthlyUsageWindowStart(stripePeriodStart)
-      : stripePeriodStart;
-  if (!usageWindowStart) return null;
-
   return {
-    usageWindowStart,
+    periodStart: new Date(item.current_period_start * 1000),
+    periodEnd: new Date(item.current_period_end * 1000),
     enforceAllowance: classified.enforceAllowance,
-    planId: classified.planId,
-    ...(classified.enforceAllowance ? { allowance: classified.allowance } : {}),
+    ...(classified.enforceAllowance ? { planId: classified.planId } : {}),
   };
 }
 
-/** Verify an exact paid v3 $17 or legacy v2 $15 add-on checkout. */
+/** Verify an exact paid current $17 or legacy $15 add-on checkout. */
 export async function verifyAdditionalVideoCheckout(
   sessionId: string,
   userId: number
@@ -615,12 +622,12 @@ export async function verifyAdditionalVideoCheckout(
     stripe.checkout.sessions.listLineItems(sessionId, { limit: 2 }),
   ]);
   const item = lineItems.data[0];
-  const price =
+  const itemPrice =
     typeof item?.price === "string"
       ? await stripe.prices.retrieve(item.price)
       : item?.price;
-  const recognizedAmount = price
-    ? recognizedAdditionalVideoAmount(price)
+  const recognizedAmount = itemPrice
+    ? recognizedAdditionalVideoAmount(itemPrice)
     : null;
 
   return (
@@ -663,6 +670,37 @@ export async function handlePortal(
   }
 }
 
+/** Change an existing Stripe subscription to a recognized current plan. */
+export async function changeSubscriptionPlan(
+  userId: number,
+  planId: PlanId
+): Promise<void> {
+  const stored = await db.getSubscription(userId);
+  if (!stored?.stripeSubscriptionId) {
+    throw new Error("This user does not have a Stripe subscription to change");
+  }
+
+  const stripe = getStripe();
+  const subscription = await stripe.subscriptions.retrieve(
+    stored.stripeSubscriptionId
+  );
+  if (subscription.items.data.length !== 1) {
+    throw new Error("Only subscriptions with one plan item can be changed");
+  }
+
+  const priceId = await ensurePrice(planId);
+  const updated = await stripe.subscriptions.update(subscription.id, {
+    items: [{ id: subscription.items.data[0].id, price: priceId, quantity: 1 }],
+    proration_behavior: "create_prorations",
+    metadata: {
+      ...subscription.metadata,
+      user_id: userId.toString(),
+      plan_id: planId,
+    },
+  });
+  await syncSubscriptionToDb(updated);
+}
+
 /** Resolve the stored plan only from an exact, recognized Stripe price. */
 function planFromSubscription(sub: Stripe.Subscription): StoredPlanId | null {
   if (sub.items.data.length !== 1) return null;
@@ -688,6 +726,7 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
   }
 
   const plan = planFromSubscription(sub);
+  const periodStart = sub.items.data[0]?.current_period_start;
   const periodEnd = sub.items.data[0]?.current_period_end;
   await db.upsertSubscription(userId, {
     stripeCustomerId:
@@ -695,8 +734,21 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
     stripeSubscriptionId: sub.id,
     plan,
     status: sub.status,
+    ...(periodStart
+      ? { currentPeriodStart: new Date(periodStart * 1000) }
+      : {}),
     ...(periodEnd ? { currentPeriodEnd: new Date(periodEnd * 1000) } : {}),
   });
+  const checkoutReservationKey = sub.metadata?.checkout_reservation_key;
+  if (
+    !isTerminalSubscriptionStatus(sub.status) &&
+    checkoutReservationKey
+  ) {
+    await db.clearSubscriptionCheckoutReservation(
+      userId,
+      checkoutReservationKey
+    );
+  }
   console.log(
     `[Billing] Synced subscription ${sub.id} for user ${userId}: ${sub.status}`
   );
@@ -741,18 +793,23 @@ export async function handleWebhook(req: Request, res: Response) {
               ? session.subscription
               : session.subscription.id;
           const sub = await getStripe().subscriptions.retrieve(subId);
-          // Ensure user mapping survives even if subscription metadata is missing.
-          if (!sub.metadata?.user_id && session.client_reference_id) {
-            await getStripe().subscriptions.update(subId, {
-              metadata: {
-                ...sub.metadata,
-                user_id: session.client_reference_id,
-              },
-            });
-            sub.metadata = {
-              ...sub.metadata,
-              user_id: session.client_reference_id,
-            };
+          // Ensure user and reservation correlation survive even if Stripe
+          // omitted subscription metadata from an older Checkout Session.
+          const metadata = { ...sub.metadata };
+          let metadataChanged = false;
+          if (!metadata.user_id && session.client_reference_id) {
+            metadata.user_id = session.client_reference_id;
+            metadataChanged = true;
+          }
+          const reservationKey =
+            session.metadata?.checkout_reservation_key;
+          if (!metadata.checkout_reservation_key && reservationKey) {
+            metadata.checkout_reservation_key = reservationKey;
+            metadataChanged = true;
+          }
+          if (metadataChanged) {
+            await getStripe().subscriptions.update(subId, { metadata });
+            sub.metadata = metadata;
           }
           await syncSubscriptionToDb(sub);
         }

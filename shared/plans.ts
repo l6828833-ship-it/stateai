@@ -1,142 +1,132 @@
-/** Immutable subscription catalog shared by pricing UI and Stripe wiring. */
+/** Subscription plans shared by pricing UI, generation limits, and Stripe. */
 
+export type BillingInterval = "month" | "year";
 export type PlanTier = "starter" | "creator" | "studio";
-export type BillingCadence = "month" | "year";
-export type PlanId =
-  | "starter_monthly"
-  | "creator_monthly"
-  | "studio_monthly"
-  | "starter_yearly"
-  | "creator_yearly"
-  | "studio_yearly";
+export type PlanId = `${PlanTier}_${"monthly" | "yearly"}`;
 
 export interface Plan {
-  readonly id: PlanId;
-  readonly lookupKey: string;
-  readonly name: string;
-  readonly tier: PlanTier;
-  readonly cadence: BillingCadence;
-  /** Compatibility alias used by existing Stripe/UI code. */
-  readonly interval: BillingCadence;
-  /** Total amount charged each billing cadence, in whole USD. */
-  readonly totalPrice: number;
-  /** Compatibility alias for totalPrice. */
-  readonly price: number;
-  readonly monthlyEquivalent: number;
-  /** Rounded savings for yearly billing versus twelve monthly payments. */
-  readonly yearlyDiscountPercent: number;
-  /** Monthly allowance priced à la carte at the flat additional-video rate. */
-  readonly aLaCarteMonthlyValue: number;
-  /** Rounded monthly-plan savings versus buying the same videos à la carte. */
-  readonly discountVsALaCartePercent: number;
-  readonly priceLabel: string;
-  readonly tagline: string;
-  readonly videoAllowance: string;
-  /** Generations available in each monthly usage window, including yearly plans. */
-  readonly includedVideos: number;
-  readonly maxResolution: "1080p";
-  readonly features: readonly string[];
-  readonly highlighted?: boolean;
-  readonly badge?: string;
+  id: PlanId;
+  tier: PlanTier;
+  name: string;
+  price: number;
+  originalPrice: number;
+  interval: BillingInterval;
+  priceLabel: string;
+  tagline: string;
+  videoAllowance: string;
+  includedVideos: number;
+  maxImages: number;
+  maxResolution: string;
+  features: string[];
+  highlighted?: boolean;
+  badge?: string;
 }
 
-export const ADDITIONAL_VIDEO_PRICE_USD = 17 as const;
-export const ADDITIONAL_VIDEO_LOOKUP_KEY =
-  "estatetour_additional_video_v3" as const;
-
-export const SHARED_PLAN_FEATURES = Object.freeze([
-  "6 images per video",
-  "1080p, high quality",
-  "Up to 15 seconds",
-  "All ratios: 9:16, 1:1, and 16:9",
-  "Best viral effects per video",
-  "No watermark",
-  `$${ADDITIONAL_VIDEO_PRICE_USD} per additional video`,
-] as const);
-
-const TIER_DATA = Object.freeze({
+const TIER_CONFIG = {
   starter: {
     name: "Starter",
-    includedVideos: 3,
-    monthly: 39,
-    yearly: 348,
-    equivalent: 29,
-    yearlyDiscountPercent: 26,
-    aLaCarteMonthlyValue: 51,
-    discountVsALaCartePercent: 24,
+    tagline: "For standout individual listings",
+    monthlyPrice: 17,
+    yearlyMonthlyPrice: 13,
+    videos: 3,
   },
   creator: {
     name: "Creator",
-    includedVideos: 8,
-    monthly: 89,
-    yearly: 780,
-    equivalent: 65,
-    yearlyDiscountPercent: 27,
-    aLaCarteMonthlyValue: 136,
-    discountVsALaCartePercent: 35,
+    tagline: "For active agents and creators",
+    monthlyPrice: 39,
+    yearlyMonthlyPrice: 29,
+    videos: 10,
   },
   studio: {
     name: "Studio",
-    includedVideos: 20,
-    monthly: 179,
-    yearly: 1620,
-    equivalent: 135,
-    yearlyDiscountPercent: 25,
-    aLaCarteMonthlyValue: 340,
-    discountVsALaCartePercent: 47,
+    tagline: "For teams and high-volume studios",
+    monthlyPrice: 79,
+    yearlyMonthlyPrice: 59,
+    videos: 30,
   },
-} as const);
+} as const;
 
-function makePlan(tier: PlanTier, cadence: BillingCadence): Plan {
-  const data = TIER_DATA[tier];
-  const id = `${tier}_${cadence === "month" ? "monthly" : "yearly"}` as PlanId;
-  const totalPrice = cadence === "month" ? data.monthly : data.yearly;
-  const monthlyEquivalent =
-    cadence === "month" ? data.monthly : data.equivalent;
-  return Object.freeze({
-    id,
-    lookupKey: `estatetour_${id}_v3`,
-    name: data.name,
+const tierFeatures: Record<PlanTier, string[]> = {
+  starter: ["3 videos per month", "6 images per video"],
+  creator: ["10 videos per month", "6 images per video"],
+  studio: ["30 videos per month", "6 images per video", "Team-ready volume"],
+};
+
+const sharedFeatures = [
+  "1080p high quality, up to 15 seconds",
+  "All ratios: 9:16, 1:1, and 16:9",
+  "Best viral effects per video",
+  "$17 per additional video",
+  "No watermark",
+] as const;
+
+const originalPriceFor = (price: number) => Math.ceil(price / 0.38);
+
+export const MONTHLY_PLANS: Plan[] = (
+  Object.keys(TIER_CONFIG) as PlanTier[]
+).map(tier => {
+  const config = TIER_CONFIG[tier];
+  const price = config.monthlyPrice;
+  return {
+    id: `${tier}_monthly`,
     tier,
-    cadence,
-    interval: cadence,
-    totalPrice,
-    price: totalPrice,
-    monthlyEquivalent,
-    yearlyDiscountPercent: data.yearlyDiscountPercent,
-    aLaCarteMonthlyValue: data.aLaCarteMonthlyValue,
-    discountVsALaCartePercent: data.discountVsALaCartePercent,
-    priceLabel:
-      cadence === "month"
-        ? `$${totalPrice}/month`
-        : `$${totalPrice}/year ($${monthlyEquivalent}/mo)`,
-    tagline:
-      cadence === "month"
-        ? "Flexible monthly billing"
-        : "Save with annual billing",
-    videoAllowance: `${data.includedVideos} videos per month`,
-    includedVideos: data.includedVideos,
+    name: config.name,
+    price,
+    originalPrice: originalPriceFor(price),
+    interval: "month",
+    priceLabel: `$${price}/month`,
+    tagline: config.tagline,
+    videoAllowance: `${config.videos} videos per month`,
+    includedVideos: config.videos,
+    maxImages: 6,
     maxResolution: "1080p",
-    features: Object.freeze([
-      `${data.includedVideos} videos per month`,
-      ...SHARED_PLAN_FEATURES,
-    ]),
-    ...(tier === "creator" ? { highlighted: true, badge: "Most Popular" } : {}),
-  });
+    highlighted: tier === "creator",
+    badge: tier === "creator" ? "Most popular" : undefined,
+    features: [...tierFeatures[tier], ...sharedFeatures],
+  };
+});
+
+export const YEARLY_PLANS: Plan[] = (
+  Object.keys(TIER_CONFIG) as PlanTier[]
+).map(tier => {
+  const config = TIER_CONFIG[tier];
+  const price = config.yearlyMonthlyPrice * 12;
+  return {
+    id: `${tier}_yearly`,
+    tier,
+    name: config.name,
+    price,
+    originalPrice: originalPriceFor(price),
+    interval: "year",
+    priceLabel: `$${price}/year`,
+    tagline: `${config.tagline} · save with annual billing`,
+    videoAllowance: `${config.videos * 12} videos per year`,
+    includedVideos: config.videos * 12,
+    maxImages: 6,
+    maxResolution: "1080p",
+    highlighted: tier === "creator",
+    badge: tier === "creator" ? "Best value" : undefined,
+    features: [
+      `${config.videos * 12} videos per year`,
+      ...tierFeatures[tier].slice(1),
+      ...sharedFeatures,
+    ],
+  };
+});
+
+export const PLANS: Plan[] = [...MONTHLY_PLANS, ...YEARLY_PLANS];
+
+export const PLAN_BY_ID = Object.fromEntries(
+  PLANS.map(plan => [plan.id, plan])
+) as Record<PlanId, Plan>;
+
+export function plansForInterval(interval: BillingInterval): Plan[] {
+  return interval === "year" ? YEARLY_PLANS : MONTHLY_PLANS;
 }
 
-export const PLANS: readonly Plan[] = Object.freeze([
-  makePlan("starter", "month"),
-  makePlan("creator", "month"),
-  makePlan("studio", "month"),
-  makePlan("starter", "year"),
-  makePlan("creator", "year"),
-  makePlan("studio", "year"),
-]);
-
-export const PLAN_BY_ID: Readonly<Record<PlanId, Plan>> = Object.freeze(
-  Object.fromEntries(PLANS.map(plan => [plan.id, plan])) as Record<PlanId, Plan>
-);
+export function isPlanId(value: string): value is PlanId {
+  return value in PLAN_BY_ID;
+}
 
 /** Tour styles — labels must be exactly these three. */
 export const TOUR_STYLES = ["Walkthrough", "Drone", "Cinematic"] as const;
@@ -149,5 +139,6 @@ export const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 export const MAX_IMAGES = 6;
 export const MAX_IMAGE_SIZE_MB = 10;
 export const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-/** Maximum base64 characters needed to encode MAX_IMAGE_BYTES (without a data-URL prefix). */
 export const MAX_IMAGE_BASE64_LENGTH = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);
+export const ADDITIONAL_VIDEO_PRICE_USD = 17;
+export const PROMOTIONAL_DISCOUNT_PERCENT = 62;

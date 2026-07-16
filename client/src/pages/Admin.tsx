@@ -1,898 +1,970 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { useAuth } from "@/_core/hooks/useAuth";
-import { trpc } from "@/lib/trpc";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
+  Activity,
   ArrowLeft,
+  Ban,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  CircleDollarSign,
-  Copy,
+  Clipboard,
+  CreditCard,
+  FileClock,
   KeyRound,
+  LayoutDashboard,
   Loader2,
+  LockKeyhole,
   LogOut,
-  RefreshCw,
+  Menu,
   Search,
+  Shield,
   ShieldCheck,
-  UserRound,
+  Sparkles,
+  UserCog,
   Users,
-  Video,
+  X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { PLANS, type PlanId } from "@shared/plans";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 
-const PAGE_SIZE = 20;
+type AdminTab = "users" | "audit";
+
+function StatusPill({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+        active ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+      )}
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          active ? "bg-emerald-500" : "bg-red-500"
+        )}
+      />
+      {children}
+    </span>
+  );
+}
 
 function formatDate(value: Date | string | null | undefined) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
-function createTemporaryPassword() {
-  const alphabet =
-    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
-  const bytes = new Uint8Array(18);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join("");
-}
-
-function auditMetadata(value: string) {
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const entries = Object.entries(parsed);
-    if (!entries.length) return "No additional details";
-    return entries.map(([key, item]) => `${key}: ${String(item)}`).join(" · ");
-  } catch {
-    return "Details unavailable";
-  }
+  return new Date(value).toLocaleString();
 }
 
 export default function Admin() {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
+  const [tab, setTab] = useState<AdminTab>("users");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState("");
+  const [auditPage, setAuditPage] = useState(1);
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const [role, setRole] = useState<"all" | "user" | "admin">("all");
+  const [accountStatus, setAccountStatus] = useState<
+    "all" | "active" | "disabled"
+  >("all");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
-  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(
+    null
+  );
+  const [usageAdjustment, setUsageAdjustment] = useState("0");
 
   useEffect(() => {
-    if (loading) return;
-    if (!user) navigate("/login");
-    else if (user.role !== "admin") navigate("/dashboard");
+    if (!loading && !user) navigate("/login");
+    else if (!loading && user?.forcePasswordChange)
+      navigate("/change-password");
+    else if (!loading && user?.role !== "admin") navigate("/dashboard");
   }, [loading, navigate, user]);
 
+  useEffect(() => setPage(1), [deferredSearch, role, accountStatus]);
+
   const usersQuery = trpc.admin.listUsers.useQuery(
-    { page, pageSize: PAGE_SIZE, search: search || undefined },
+    {
+      page,
+      pageSize: 20,
+      search: deferredSearch || undefined,
+      role,
+      accountStatus,
+    },
     { enabled: user?.role === "admin", placeholderData: previous => previous }
   );
-  const detailsQuery = trpc.admin.userDetails.useQuery(
-    { userId: selectedUserId ?? 0 },
-    { enabled: user?.role === "admin" && selectedUserId !== null }
+  const auditQuery = trpc.admin.listAuditLogs.useQuery(
+    { page: auditPage, pageSize: 30 },
+    {
+      enabled: user?.role === "admin" && tab === "audit",
+      placeholderData: previous => previous,
+    }
   );
+  const detailQuery = trpc.admin.getUser.useQuery(
+    { userId: selectedUserId ?? 0 },
+    { enabled: selectedUserId !== null }
+  );
+  const plansQuery = trpc.admin.availablePlans.useQuery(undefined, {
+    enabled: selectedUserId !== null,
+  });
 
   useEffect(() => {
-    const rows = usersQuery.data?.rows;
-    if (!rows?.length) {
-      setSelectedUserId(null);
-      return;
-    }
-    if (!selectedUserId || !rows.some(item => item.id === selectedUserId)) {
-      setSelectedUserId(rows[0].id);
-    }
-  }, [selectedUserId, usersQuery.data?.rows]);
+    if (detailQuery.data)
+      setUsageAdjustment(String(detailQuery.data.usageAdjustment ?? 0));
+  }, [detailQuery.data]);
 
   const refreshAdminData = async () => {
     await Promise.all([
       utils.admin.listUsers.invalidate(),
-      utils.admin.userDetails.invalidate(),
-      utils.auth.me.invalidate(),
+      utils.admin.getUser.invalidate(),
+      utils.admin.listAuditLogs.invalidate(),
     ]);
   };
 
-  const mutationOptions = {
-    onSuccess: async () => {
-      await refreshAdminData();
-    },
-    onError: (error: { message: string }) => toast.error(error.message),
-  };
-  const statusMutation =
-    trpc.admin.setAccountStatus.useMutation(mutationOptions);
-  const roleMutation = trpc.admin.setRole.useMutation(mutationOptions);
-  const sessionsMutation =
-    trpc.admin.revokeSessions.useMutation(mutationOptions);
-  const usageMutation = trpc.admin.adjustUsage.useMutation({
-    ...mutationOptions,
-    onSuccess: async () => {
-      await refreshAdminData();
-      toast.success("Usage adjustment recorded in the immutable ledger.");
-    },
+  const accountMutation = trpc.admin.setAccountDisabled.useMutation({
+    onSuccess: refreshAdminData,
+  });
+  const roleMutation = trpc.admin.setRole.useMutation({
+    onSuccess: refreshAdminData,
+  });
+  const resetMutation = trpc.admin.resetPassword.useMutation({
+    onSuccess: refreshAdminData,
+  });
+  const revokeMutation = trpc.admin.revokeSessions.useMutation({
+    onSuccess: refreshAdminData,
+  });
+  const usageMutation = trpc.admin.setUsageAdjustment.useMutation({
+    onSuccess: refreshAdminData,
   });
   const planMutation = trpc.admin.changePlan.useMutation({
-    ...mutationOptions,
-    onSuccess: async result => {
-      await refreshAdminData();
-      if (result.syncPending) {
-        toast.warning(
-          "Stripe changed the plan. Local status will refresh from the Stripe webhook shortly."
-        );
-      } else {
-        toast.success(
-          "Stripe subscription plan changed with immediate proration."
-        );
-      }
-    },
+    onSuccess: refreshAdminData,
   });
-  const passwordMutation = trpc.admin.issueTemporaryPassword.useMutation({
-    ...mutationOptions,
-    onSuccess: async () => {
-      await refreshAdminData();
-      setPasswordDialogOpen(false);
-      setTemporaryPassword("");
-      toast.success(
-        "Temporary password set. The user must change it at next sign-in."
-      );
-    },
-  });
-
-  const totalPages = Math.max(
-    1,
-    Math.ceil((usersQuery.data?.total ?? 0) / PAGE_SIZE)
-  );
-  const selected = detailsQuery.data;
-  const busy =
-    statusMutation.isPending ||
+  const actionPending =
+    accountMutation.isPending ||
     roleMutation.isPending ||
-    sessionsMutation.isPending ||
+    resetMutation.isPending ||
+    revokeMutation.isPending ||
     usageMutation.isPending ||
-    planMutation.isPending ||
-    passwordMutation.isPending;
+    planMutation.isPending;
 
-  const summary = useMemo(() => {
-    const rows = usersQuery.data?.rows ?? [];
-    return {
-      active: rows.filter(item => item.accountStatus === "active").length,
-      admins: rows.filter(item => item.role === "admin").length,
-      subscribed: rows.filter(item =>
-        ["active", "trialing"].includes(item.subscriptionStatus ?? "")
-      ).length,
-    };
-  }, [usersQuery.data?.rows]);
-
-  const submitSearch = (event: FormEvent) => {
-    event.preventDefault();
-    setPage(1);
-    setSearch(searchInput.trim());
-  };
-
-  const changeStatus = async (status: "active" | "disabled") => {
-    if (!selectedUserId || !selected) return;
-    if (
-      status === "disabled" &&
-      !window.confirm(
-        `Disable ${selected.user.email ?? selected.user.name ?? "this user"} and revoke their sessions?`
-      )
-    )
-      return;
+  const runAction = async (action: () => Promise<unknown>, success: string) => {
     try {
-      await statusMutation.mutateAsync({ userId: selectedUserId, status });
-      toast.success(
-        status === "active"
-          ? "Account enabled."
-          : "Account disabled and sessions revoked."
+      await action();
+      toast.success(success);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Admin action failed"
       );
-    } catch {}
-  };
-
-  const changeRole = async (role: "user" | "admin") => {
-    if (!selectedUserId || !selected || role === selected.user.role) return;
-    if (
-      !window.confirm(
-        `Change this account's role to ${role}? Existing sessions will be revoked.`
-      )
-    )
-      return;
-    try {
-      await roleMutation.mutateAsync({ userId: selectedUserId, role });
-      toast.success(`Role changed to ${role}.`);
-    } catch {}
-  };
-
-  const changePlan = async (planId: PlanId) => {
-    if (!selectedUserId || !selected || planId === selected.subscription?.plan)
-      return;
-    const plan = PLANS.find(item => item.id === planId);
-    if (!plan) return;
-    if (
-      !window.confirm(
-        `Change this Stripe subscription to ${plan.name} ${plan.cadence === "year" ? "yearly" : "monthly"}? Stripe will apply the change now with proration.`
-      )
-    )
-      return;
-    try {
-      await planMutation.mutateAsync({ userId: selectedUserId, planId });
-    } catch {}
-  };
-
-  const revokeSessions = async () => {
-    if (
-      !selectedUserId ||
-      !window.confirm("Sign this user out on every device?")
-    )
-      return;
-    try {
-      await sessionsMutation.mutateAsync({ userId: selectedUserId });
-      toast.success("All sessions revoked.");
-    } catch {}
-  };
-
-  const adjustUsage = async () => {
-    if (!selectedUserId) return;
-    const deltaRaw = window.prompt(
-      "Usage adjustment: use a negative number to restore videos or a positive number to consume allowance.",
-      "-1"
-    );
-    if (deltaRaw === null) return;
-    const delta = Number(deltaRaw);
-    if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100) {
-      toast.error("Enter a non-zero whole number between -100 and 100.");
-      return;
     }
-    const reason = window.prompt(
-      "Reason for this auditable adjustment:",
-      "Support correction"
-    );
-    if (!reason || reason.trim().length < 3) {
-      toast.error("A reason of at least 3 characters is required.");
-      return;
-    }
-    try {
-      await usageMutation.mutateAsync({
-        userId: selectedUserId,
-        delta,
-        reason: reason.trim(),
-      });
-    } catch {}
   };
 
-  const openPasswordDialog = () => {
-    setTemporaryPassword(createTemporaryPassword());
-    setPasswordDialogOpen(true);
-  };
-
-  const copyPassword = async () => {
-    await navigator.clipboard.writeText(temporaryPassword);
-    toast.success(
-      "Temporary password copied. Share it through a secure channel."
-    );
+  const openUser = (id: number) => {
+    setSelectedUserId(id);
+    setTemporaryPassword(null);
   };
 
   if (loading || (user?.role === "admin" && usersQuery.isLoading)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/20">
-        <Loader2 className="h-7 w-7 animate-spin text-primary" />
+      <div className="min-h-screen bg-[#f7f7f8] p-8">
+        <Skeleton className="h-[80vh] rounded-3xl" />
       </div>
     );
   }
   if (!user || user.role !== "admin") return null;
 
+  const data = usersQuery.data;
+  const selected = detailQuery.data;
+
   return (
-    <div className="min-h-screen bg-muted/20">
-      <header className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/dashboard")}
-              aria-label="Back to dashboard"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-950 text-white">
-              <ShieldCheck className="h-4 w-4" />
+    <div className="flex min-h-screen bg-[#f7f7f8] text-zinc-950">
+      {sidebarOpen && (
+        <button
+          className="fixed inset-0 z-40 bg-zinc-950/30 backdrop-blur-sm lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-label="Close admin navigation"
+        />
+      )}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-zinc-950 text-white transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="flex h-20 items-center justify-between border-b border-white/10 px-5">
+          <button
+            onClick={() => navigate("/")}
+            className="flex items-center gap-3 text-left"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-zinc-950">
+              <Shield className="h-5 w-5" />
             </span>
-            <div>
-              <h1 className="font-display text-lg">Admin dashboard</h1>
-              <p className="hidden text-xs text-muted-foreground sm:block">
-                Secure account and subscription operations
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden text-sm text-muted-foreground md:inline">
-              {user.email}
+            <span>
+              <strong className="block font-display">EstateTour</strong>
+              <span className="text-[10px] uppercase tracking-[0.18em] text-white/40">
+                Admin console
+              </span>
             </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void refreshAdminData()}
-              disabled={busy}
-            >
-              <RefreshCw className="mr-2 h-3.5 w-3.5" /> Refresh
-            </Button>
-          </div>
+          </button>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="rounded-lg p-2 text-white/50 hover:bg-white/10 lg:hidden"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-      </header>
+        <nav className="flex-1 space-y-2 p-4">
+          <button
+            onClick={() => {
+              setTab("users");
+              setSidebarOpen(false);
+            }}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium",
+              tab === "users"
+                ? "bg-white text-zinc-950"
+                : "text-white/60 hover:bg-white/10 hover:text-white"
+            )}
+          >
+            <Users className="h-4 w-4" /> User management
+          </button>
+          <button
+            onClick={() => {
+              setTab("audit");
+              setSidebarOpen(false);
+            }}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium",
+              tab === "audit"
+                ? "bg-white text-zinc-950"
+                : "text-white/60 hover:bg-white/10 hover:text-white"
+            )}
+          >
+            <FileClock className="h-4 w-4" /> Audit history
+          </button>
+          <div className="my-3 h-px bg-white/10" />
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            <LayoutDashboard className="h-4 w-4" /> User dashboard
+          </button>
+          <button
+            onClick={() => navigate("/")}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            <ArrowLeft className="h-4 w-4" /> Public website
+          </button>
+        </nav>
+        <div className="border-t border-white/10 p-4">
+          <div className="mb-3 rounded-xl bg-white/5 p-3">
+            <p className="truncate text-sm font-medium">
+              {user.name || "Administrator"}
+            </p>
+            <p className="truncate text-xs text-white/40">{user.email}</p>
+          </div>
+          <button
+            onClick={async () => {
+              await logout();
+              navigate("/");
+            }}
+            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <LogOut className="h-4 w-4" /> Sign out
+          </button>
+        </div>
+      </aside>
 
-      <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6">
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            {
-              label: "Total users",
-              value: usersQuery.data?.total ?? 0,
-              icon: Users,
-            },
-            { label: "Active on page", value: summary.active, icon: UserRound },
-            {
-              label: "Admins on page",
-              value: summary.admins,
-              icon: ShieldCheck,
-            },
-            {
-              label: "Paid on page",
-              value: summary.subscribed,
-              icon: CircleDollarSign,
-            },
-          ].map(item => (
-            <Card key={item.label} className="gap-3 py-4">
-              <CardContent className="flex items-center justify-between px-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">{item.label}</p>
-                  <p className="mt-1 text-2xl font-bold">{item.value}</p>
-                </div>
-                <item.icon className="h-5 w-5 text-primary" />
-              </CardContent>
-            </Card>
-          ))}
-        </section>
-
-        <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.65fr)]">
-          <Card className="min-w-0 gap-4 py-5">
-            <CardHeader className="gap-4 px-4 sm:px-6 md:grid-cols-[1fr_auto]">
-              <div>
-                <CardTitle>Users</CardTitle>
-                <CardDescription>
-                  Search by name, email, or account ID.
-                </CardDescription>
-              </div>
-              <form
-                onSubmit={submitSearch}
-                className="flex w-full gap-2 md:w-80"
-              >
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={searchInput}
-                    onChange={event => setSearchInput(event.target.value)}
-                    className="pl-9"
-                    placeholder="Search users"
-                  />
-                </div>
-                <Button type="submit" size="sm">
-                  Search
-                </Button>
-              </form>
-            </CardHeader>
-            <CardContent className="px-0">
-              {usersQuery.error ? (
-                <p className="px-6 py-10 text-center text-sm text-destructive">
-                  {usersQuery.error.message}
-                </p>
-              ) : usersQuery.data?.rows.length === 0 ? (
-                <p className="px-6 py-10 text-center text-sm text-muted-foreground">
-                  No users match this search.
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="pl-6">User</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Plan / payment</TableHead>
-                      <TableHead className="pr-6">Last sign-in</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {usersQuery.data?.rows.map(item => (
-                      <TableRow
-                        key={item.id}
-                        data-state={
-                          selectedUserId === item.id ? "selected" : undefined
-                        }
-                        className="cursor-pointer"
-                        onClick={() => setSelectedUserId(item.id)}
-                      >
-                        <TableCell className="pl-6">
-                          <p className="max-w-52 truncate font-medium">
-                            {item.name || "Unnamed user"}
-                          </p>
-                          <p className="max-w-52 truncate text-xs text-muted-foreground">
-                            {item.email || item.openId}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              item.role === "admin" ? "default" : "outline"
-                            }
-                          >
-                            {item.role}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              item.accountStatus === "active"
-                                ? "secondary"
-                                : "destructive"
-                            }
-                          >
-                            {item.accountStatus}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <p className="text-xs font-medium">
-                            {item.subscriptionPlan ?? "No plan"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {item.subscriptionStatus ?? "No payment"}
-                          </p>
-                        </TableCell>
-                        <TableCell className="pr-6 text-xs text-muted-foreground">
-                          {formatDate(item.lastSignedIn)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-            <div className="flex items-center justify-between border-t px-4 pt-4 sm:px-6">
-              <p className="text-xs text-muted-foreground">
-                Page {page} of {totalPages} · {usersQuery.data?.total ?? 0}{" "}
-                users
+      <div className="min-w-0 flex-1">
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-zinc-200 bg-white/85 px-4 backdrop-blur-xl sm:px-7">
+          <div className="flex items-center gap-3">
+            <button
+              className="rounded-xl border border-zinc-200 p-2 lg:hidden"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+            <div>
+              <h1 className="font-display text-lg">
+                {tab === "users"
+                  ? "User management"
+                  : "Immutable audit history"}
+              </h1>
+              <p className="hidden text-xs text-zinc-400 sm:block">
+                Secure operational controls for your SaaS
               </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={page <= 1}
-                  onClick={() => setPage(value => value - 1)}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  disabled={page >= totalPages}
-                  onClick={() => setPage(value => value + 1)}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
             </div>
-          </Card>
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+            <ShieldCheck className="h-3.5 w-3.5" /> Admin only
+          </span>
+        </header>
 
-          <Card className="min-w-0 gap-5 py-5">
-            <CardHeader>
-              <CardTitle>User details</CardTitle>
-              <CardDescription>
-                Account, security, subscription, and usage.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              {detailsQuery.isLoading ? (
-                <div className="flex h-60 items-center justify-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                </div>
-              ) : detailsQuery.error ? (
-                <p className="py-12 text-center text-sm text-destructive">
-                  {detailsQuery.error.message}
-                </p>
-              ) : selected ? (
-                <>
-                  <div className="rounded-2xl border bg-muted/30 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h2 className="font-semibold">
-                          {selected.user.name || "Unnamed user"}
-                        </h2>
-                        <p className="text-sm text-muted-foreground">
-                          {selected.user.email || "No email"}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          ID {selected.user.id} ·{" "}
-                          {selected.user.loginMethod || "unknown login"}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Badge
-                          variant={
-                            selected.user.accountStatus === "active"
-                              ? "secondary"
-                              : "destructive"
-                          }
-                        >
-                          {selected.user.accountStatus}
-                        </Badge>
-                        <Badge
-                          variant={
-                            selected.user.role === "admin"
-                              ? "default"
-                              : "outline"
-                          }
-                        >
-                          {selected.user.role}
-                        </Badge>
-                      </div>
-                    </div>
-                    <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <dt className="text-muted-foreground">Created</dt>
-                        <dd className="mt-1 font-medium">
-                          {formatDate(selected.user.createdAt)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">Last sign-in</dt>
-                        <dd className="mt-1 font-medium">
-                          {formatDate(selected.user.lastSignedIn)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">
-                          Email verification
-                        </dt>
-                        <dd className="mt-1 font-medium">
-                          {selected.user.emailVerified
-                            ? "Verified"
-                            : "Unverified"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">
-                          Password state
-                        </dt>
-                        <dd className="mt-1 font-medium">
-                          {selected.user.mustChangePassword
-                            ? "Change required"
-                            : "Normal"}
-                        </dd>
-                      </div>
-                    </dl>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl border p-4">
-                      <Video className="h-4 w-4 text-primary" />
-                      <p className="mt-3 text-2xl font-bold">
-                        {selected.usage.currentWindow}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Videos in allowance window
-                      </p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {selected.usage.total} lifetime ·{" "}
-                        {selected.usage.adjustmentCurrentWindow >= 0 ? "+" : ""}
-                        {selected.usage.adjustmentCurrentWindow} adjusted
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border p-4">
-                      <CircleDollarSign className="h-4 w-4 text-primary" />
-                      <p className="mt-3 truncate text-sm font-bold">
-                        {selected.subscription?.plan ?? "No plan"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {selected.subscription?.status ?? "No payment"}
-                      </p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Renews{" "}
-                        {formatDate(selected.subscription?.currentPeriodEnd)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <h3 className="text-sm font-semibold">Controls</h3>
-                    <label className="block space-y-1.5 text-xs text-muted-foreground">
-                      Stripe plan
-                      <Select
-                        value={selected.subscription?.plan ?? undefined}
-                        onValueChange={value =>
-                          void changePlan(value as PlanId)
-                        }
-                        disabled={
-                          busy || !selected.subscription?.stripeSubscriptionId
-                        }
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue
-                            placeholder={
-                              selected.subscription?.stripeSubscriptionId
-                                ? "Choose a plan"
-                                : "No Stripe subscription"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {PLANS.map(plan => (
-                            <SelectItem key={plan.id} value={plan.id}>
-                              {plan.name} ·{" "}
-                              {plan.cadence === "year"
-                                ? `$${plan.totalPrice}/yr`
-                                : `$${plan.totalPrice}/mo`}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <span className="block text-[10px]">
-                        Changes are sent to Stripe immediately with proration;
-                        local records update only after Stripe succeeds.
+        <main className="p-4 sm:p-7 lg:p-9">
+          {tab === "users" ? (
+            <>
+              <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  {
+                    label: "Total users",
+                    value: data?.overview.total ?? 0,
+                    icon: Users,
+                  },
+                  {
+                    label: "Active accounts",
+                    value: data?.overview.active ?? 0,
+                    icon: CheckCircle2,
+                  },
+                  {
+                    label: "Disabled",
+                    value: data?.overview.disabled ?? 0,
+                    icon: Ban,
+                  },
+                  {
+                    label: "Administrators",
+                    value: data?.overview.admins ?? 0,
+                    icon: ShieldCheck,
+                  },
+                ].map(metric => (
+                  <div
+                    key={metric.label}
+                    className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-100">
+                        <metric.icon className="h-4 w-4" />
                       </span>
-                    </label>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="space-y-1.5 text-xs text-muted-foreground">
-                        Role
-                        <Select
-                          value={selected.user.role}
-                          onValueChange={value =>
-                            void changeRole(value as "user" | "admin")
-                          }
-                          disabled={busy}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="user">User</SelectItem>
-                            <SelectItem value="admin">Administrator</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </label>
-                      <label className="space-y-1.5 text-xs text-muted-foreground">
-                        Account status
-                        <Select
-                          value={selected.user.accountStatus}
-                          onValueChange={value =>
-                            void changeStatus(value as "active" | "disabled")
-                          }
-                          disabled={busy}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="active">Active</SelectItem>
-                            <SelectItem value="disabled">Disabled</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </label>
+                      <strong className="font-display text-3xl">
+                        {metric.value}
+                      </strong>
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-3">
-                      <Button
-                        variant="outline"
-                        onClick={openPasswordDialog}
-                        disabled={busy || selected.user.id === user.id}
-                        title={
-                          selected.user.id === user.id
-                            ? "Use your account password-change flow for your own password"
-                            : undefined
-                        }
-                      >
-                        <KeyRound className="mr-2 h-4 w-4" /> Temporary password
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => void adjustUsage()}
-                        disabled={busy}
-                      >
-                        <Video className="mr-2 h-4 w-4" /> Adjust usage
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => void revokeSessions()}
-                        disabled={busy}
-                      >
-                        <LogOut className="mr-2 h-4 w-4" /> Revoke sessions
-                      </Button>
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Existing passwords are securely hashed and can never be
-                      viewed. Temporary passwords force a password change and
-                      revoke existing sessions.
+                    <p className="mt-3 text-sm text-zinc-500">{metric.label}</p>
+                  </div>
+                ))}
+              </section>
+
+              <section className="mt-6 overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-3 border-b border-zinc-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                  <div className="relative min-w-0 flex-1 sm:max-w-md">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                    <Input
+                      value={search}
+                      onChange={event => setSearch(event.target.value)}
+                      placeholder="Search name, email, or account ID…"
+                      className="pl-9"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <select
+                      value={role}
+                      onChange={event =>
+                        setRole(event.target.value as typeof role)
+                      }
+                      className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm"
+                    >
+                      <option value="all">All roles</option>
+                      <option value="user">Users</option>
+                      <option value="admin">Admins</option>
+                    </select>
+                    <select
+                      value={accountStatus}
+                      onChange={event =>
+                        setAccountStatus(
+                          event.target.value as typeof accountStatus
+                        )
+                      }
+                      className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm"
+                    >
+                      <option value="all">All accounts</option>
+                      <option value="active">Active</option>
+                      <option value="disabled">Disabled</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="hidden overflow-x-auto md:block">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-zinc-50 text-[11px] uppercase tracking-[0.12em] text-zinc-400">
+                      <tr>
+                        <th className="px-5 py-3 font-semibold">User</th>
+                        <th className="px-5 py-3 font-semibold">Role</th>
+                        <th className="px-5 py-3 font-semibold">
+                          Plan / payment
+                        </th>
+                        <th className="px-5 py-3 font-semibold">Usage</th>
+                        <th className="px-5 py-3 font-semibold">Last active</th>
+                        <th className="px-5 py-3" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {data?.items.map(item => (
+                        <tr
+                          key={item.id}
+                          className="transition-colors hover:bg-zinc-50/80"
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-sm font-semibold text-white">
+                                {(item.name || item.email || "U")
+                                  .charAt(0)
+                                  .toUpperCase()}
+                              </span>
+                              <div className="min-w-0">
+                                <p className="max-w-52 truncate font-medium">
+                                  {item.name || "Unnamed user"}
+                                </p>
+                                <p className="max-w-52 truncate text-xs text-zinc-400">
+                                  {item.email || item.openId}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium capitalize">
+                              {item.role}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4">
+                            <p className="font-medium capitalize">
+                              {item.plan?.replaceAll("_", " ") || "No plan"}
+                            </p>
+                            <p className="mt-0.5 text-xs text-zinc-400 capitalize">
+                              {item.subscriptionStatus || "No payment"}
+                            </p>
+                          </td>
+                          <td className="px-5 py-4">
+                            <p className="font-medium">
+                              {item.usageUsed}
+                              {item.usageAllowance !== null
+                                ? ` / ${item.usageAllowance}`
+                                : ""}
+                            </p>
+                            <p className="text-xs text-zinc-400">
+                              {item.totalGenerated} all time
+                            </p>
+                          </td>
+                          <td className="px-5 py-4 text-xs text-zinc-500">
+                            {formatDate(item.lastSignedIn)}
+                          </td>
+                          <td className="px-5 py-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <StatusPill active={!item.disabledAt}>
+                                {item.disabledAt ? "Disabled" : "Active"}
+                              </StatusPill>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openUser(item.id)}
+                                className="rounded-full"
+                              >
+                                Manage
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="divide-y divide-zinc-100 md:hidden">
+                  {data?.items.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => openUser(item.id)}
+                      className="flex w-full items-center gap-3 p-4 text-left"
+                    >
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-sm font-semibold text-white">
+                        {(item.name || item.email || "U")
+                          .charAt(0)
+                          .toUpperCase()}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-sm">
+                          {item.name || "Unnamed user"}
+                        </strong>
+                        <span className="block truncate text-xs text-zinc-400">
+                          {item.email || item.openId}
+                        </span>
+                        <span className="mt-1 block text-xs capitalize text-zinc-500">
+                          {item.plan?.replaceAll("_", " ") || "No plan"} ·{" "}
+                          {item.usageUsed} used
+                        </span>
+                      </span>
+                      <StatusPill active={!item.disabledAt}>
+                        {item.disabledAt ? "Off" : "On"}
+                      </StatusPill>
+                    </button>
+                  ))}
+                </div>
+
+                {data?.items.length === 0 && (
+                  <div className="p-12 text-center">
+                    <Users className="mx-auto h-8 w-8 text-zinc-300" />
+                    <p className="mt-3 text-sm text-zinc-500">
+                      No users match these filters.
                     </p>
                   </div>
+                )}
+                <div className="flex items-center justify-between border-t border-zinc-100 px-4 py-3 text-xs text-zinc-500 sm:px-5">
+                  <span>{data?.pagination.total ?? 0} users</span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={page <= 1}
+                      onClick={() => setPage(value => value - 1)}
+                      className="h-8 w-8 rounded-full p-0"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <span>
+                      Page {page} of {data?.pagination.pageCount ?? 1}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={page >= (data?.pagination.pageCount ?? 1)}
+                      onClick={() => setPage(value => value + 1)}
+                      className="h-8 w-8 rounded-full p-0"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : (
+            <section className="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-zinc-100 p-5">
+                <div>
+                  <h2 className="font-display text-lg">
+                    Administrator activity
+                  </h2>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Database-protected append-only records. Updates and deletion
+                    are rejected.
+                  </p>
+                </div>
+                <span className="rounded-full bg-zinc-950 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
+                  Immutable
+                </span>
+              </div>
+              <div className="divide-y divide-zinc-100">
+                {auditQuery.isLoading ? (
+                  <div className="p-8">
+                    <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+                  </div>
+                ) : (
+                  auditQuery.data?.items.map(log => (
+                    <article
+                      key={log.id}
+                      className="grid gap-3 p-5 sm:grid-cols-[2fr_1fr_auto]"
+                    >
+                      <div className="flex gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100">
+                          <Activity className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold">
+                            {log.action.replaceAll(".", " ")}
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            By{" "}
+                            {log.actor?.name ||
+                              log.actor?.email ||
+                              `User #${log.actorUserId}`}
+                            {log.targetUserId
+                              ? ` · Target ${log.target?.name || log.target?.email || `#${log.targetUserId}`}`
+                              : ""}
+                          </p>
+                          <code className="mt-2 block max-w-2xl overflow-x-auto rounded-lg bg-zinc-50 p-2 text-[10px] text-zinc-500">
+                            {log.details}
+                          </code>
+                        </div>
+                      </div>
+                      <div className="text-xs text-zinc-400">
+                        <p>{log.ipAddress || "IP unavailable"}</p>
+                        <p className="mt-1 truncate">
+                          {log.userAgent || "Agent unavailable"}
+                        </p>
+                      </div>
+                      <time className="text-xs text-zinc-400">
+                        {formatDate(log.createdAt)}
+                      </time>
+                    </article>
+                  ))
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-zinc-100 p-4 text-xs text-zinc-500">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={auditPage <= 1}
+                  onClick={() => setAuditPage(value => value - 1)}
+                  className="h-8 w-8 rounded-full p-0"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span>
+                  Page {auditPage} of{" "}
+                  {auditQuery.data?.pagination.pageCount ?? 1}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    auditPage >= (auditQuery.data?.pagination.pageCount ?? 1)
+                  }
+                  onClick={() => setAuditPage(value => value + 1)}
+                  className="h-8 w-8 rounded-full p-0"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
 
-                  <div className="space-y-3">
-                    <h3 className="text-sm font-semibold">
-                      Payment connection
-                    </h3>
-                    <div className="rounded-2xl border p-4 text-xs">
-                      <div className="flex justify-between gap-3">
-                        <span className="text-muted-foreground">
-                          Stripe customer
+      <Dialog
+        open={selectedUserId !== null}
+        onOpenChange={open => {
+          if (!open) setSelectedUserId(null);
+        }}
+      >
+        <DialogContent className="max-h-[94vh] w-[min(96vw,56rem)] !max-w-none overflow-y-auto rounded-3xl border-zinc-200 bg-white p-0">
+          <DialogTitle className="sr-only">Manage user</DialogTitle>
+          {detailQuery.isLoading || !selected ? (
+            <div className="flex min-h-80 items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : (
+            <div>
+              <div className="border-b border-zinc-100 bg-zinc-50 p-6 sm:p-7">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-950 text-xl font-bold text-white">
+                      {(selected.name || selected.email || "U")
+                        .charAt(0)
+                        .toUpperCase()}
+                    </span>
+                    <div>
+                      <h2 className="font-display text-xl">
+                        {selected.name || "Unnamed user"}
+                      </h2>
+                      <p className="mt-1 text-sm text-zinc-500">
+                        {selected.email || selected.openId}
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <StatusPill active={!selected.disabledAt}>
+                          {selected.disabledAt ? "Disabled" : "Active"}
+                        </StatusPill>
+                        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold capitalize shadow-sm">
+                          {selected.role}
                         </span>
-                        <span className="font-medium">
-                          {selected.subscription?.stripeCustomerId
-                            ? "Connected"
-                            : "Not connected"}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex justify-between gap-3">
-                        <span className="text-muted-foreground">
-                          Subscription
-                        </span>
-                        <span className="font-medium">
-                          {selected.subscription?.stripeSubscriptionId
-                            ? "Connected"
-                            : "Not connected"}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex justify-between gap-3">
-                        <span className="text-muted-foreground">
-                          Payment status
-                        </span>
-                        <span className="font-medium">
-                          {selected.subscription?.status ?? "No payment record"}
-                        </span>
+                        {selected.forcePasswordChange && (
+                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                            Password change required
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
+                  <p className="text-xs text-zinc-400">
+                    User #{selected.id}
+                    <br />
+                    Joined {formatDate(selected.createdAt)}
+                  </p>
+                </div>
+              </div>
 
-                  <div className="space-y-3">
-                    <h3 className="text-sm font-semibold">
-                      Recent audit history
-                    </h3>
-                    {selected.recentAudits.length ? (
-                      <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                        {selected.recentAudits.map(audit => (
-                          <div key={audit.id} className="rounded-xl border p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="text-xs font-semibold">
-                                {audit.action.replaceAll(".", " · ")}
-                              </p>
-                              <time className="shrink-0 text-[10px] text-muted-foreground">
-                                {formatDate(audit.createdAt)}
-                              </time>
-                            </div>
-                            <p className="mt-1 text-[11px] text-muted-foreground">
-                              {auditMetadata(audit.metadata)}
-                            </p>
-                            <p className="mt-1 text-[10px] text-muted-foreground">
-                              Admin ID {audit.adminId}
-                            </p>
-                          </div>
-                        ))}
+              <div className="grid gap-6 p-6 sm:p-7 lg:grid-cols-2">
+                <section className="space-y-4">
+                  <h3 className="flex items-center gap-2 font-display">
+                    <CreditCard className="h-4 w-4" /> Subscription & usage
+                  </h3>
+                  <div className="rounded-2xl border border-zinc-200 p-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-xs text-zinc-400">Plan</p>
+                        <p className="mt-1 font-medium capitalize">
+                          {selected.plan?.replaceAll("_", " ") || "No plan"}
+                        </p>
                       </div>
+                      <div>
+                        <p className="text-xs text-zinc-400">Payment</p>
+                        <p className="mt-1 font-medium capitalize">
+                          {selected.subscriptionStatus || "No payment"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-400">Current usage</p>
+                        <p className="mt-1 font-medium">
+                          {selected.usageUsed}
+                          {selected.usageAllowance !== null
+                            ? ` / ${selected.usageAllowance}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-400">All-time videos</p>
+                        <p className="mt-1 font-medium">
+                          {selected.totalGenerated}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-4 border-t border-zinc-100 pt-3 text-xs text-zinc-400">
+                      Period ends {formatDate(selected.currentPeriodEnd)}
+                    </p>
+                  </div>
+                  <label className="block text-xs font-medium text-zinc-500">
+                    Stripe-backed plan change
+                    <select
+                      disabled={!selected.stripeSubscriptionId || actionPending}
+                      defaultValue={selected.plan || ""}
+                      onChange={event => {
+                        const planId = event.target.value;
+                        if (
+                          !planId ||
+                          !window.confirm(
+                            "Change this live Stripe subscription? Proration may apply."
+                          )
+                        )
+                          return;
+                        void runAction(
+                          () =>
+                            planMutation.mutateAsync({
+                              userId: selected.id,
+                              planId,
+                            }),
+                          "Stripe subscription updated"
+                        );
+                      }}
+                      className="mt-1.5 h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm disabled:bg-zinc-50"
+                    >
+                      <option value="">
+                        {selected.stripeSubscriptionId
+                          ? "Choose a plan"
+                          : "No Stripe subscription"}
+                      </option>
+                      {plansQuery.data?.map(plan => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.name} · {plan.interval} · {plan.priceLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      min={-1000}
+                      max={10000}
+                      value={usageAdjustment}
+                      onChange={event => setUsageAdjustment(event.target.value)}
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={actionPending || !selected.stripeSubscriptionId}
+                      onClick={() =>
+                        void runAction(
+                          () =>
+                            usageMutation.mutateAsync({
+                              userId: selected.id,
+                              adjustment: Number(usageAdjustment),
+                            }),
+                          "Usage adjustment saved"
+                        )
+                      }
+                      className="shrink-0 rounded-xl"
+                    >
+                      Save adjustment
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Adds or removes included generations for the current billing
+                    period.
+                  </p>
+                </section>
+
+                <section className="space-y-4">
+                  <h3 className="flex items-center gap-2 font-display">
+                    <UserCog className="h-4 w-4" /> Security & access
+                  </h3>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      variant="outline"
+                      disabled={actionPending || selected.id === user.id}
+                      onClick={() =>
+                        void runAction(
+                          () =>
+                            accountMutation.mutateAsync({
+                              userId: selected.id,
+                              disabled: !selected.disabledAt,
+                            }),
+                          selected.disabledAt
+                            ? "Account enabled"
+                            : "Account disabled"
+                        )
+                      }
+                      className="justify-start rounded-xl"
+                    >
+                      {selected.disabledAt ? (
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                      ) : (
+                        <Ban className="mr-2 h-4 w-4" />
+                      )}
+                      {selected.disabledAt
+                        ? "Enable account"
+                        : "Disable account"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={actionPending || selected.id === user.id}
+                      onClick={() =>
+                        void runAction(
+                          () =>
+                            roleMutation.mutateAsync({
+                              userId: selected.id,
+                              role:
+                                selected.role === "admin" ? "user" : "admin",
+                            }),
+                          "User role updated"
+                        )
+                      }
+                      className="justify-start rounded-xl"
+                    >
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      {selected.role === "admin" ? "Make user" : "Make admin"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={actionPending || selected.id === user.id}
+                      onClick={() =>
+                        void runAction(async () => {
+                          const result = await resetMutation.mutateAsync({
+                            userId: selected.id,
+                          });
+                          setTemporaryPassword(result.temporaryPassword);
+                        }, "Temporary password created")
+                      }
+                      className="justify-start rounded-xl"
+                    >
+                      <KeyRound className="mr-2 h-4 w-4" /> Reset password
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={actionPending || selected.id === user.id}
+                      onClick={() => {
+                        if (
+                          window.confirm("Sign this user out on every device?")
+                        )
+                          void runAction(
+                            () =>
+                              revokeMutation.mutateAsync({
+                                userId: selected.id,
+                              }),
+                            "All sessions revoked"
+                          );
+                      }}
+                      className="justify-start rounded-xl"
+                    >
+                      <LockKeyhole className="mr-2 h-4 w-4" /> Sign out
+                      everywhere
+                    </Button>
+                  </div>
+                  {selected.id === user.id && (
+                    <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                      Self-lockout protection is active. You cannot disable,
+                      demote, reset, or revoke your own administrator account
+                      here.
+                    </p>
+                  )}
+                  {temporaryPassword && (
+                    <div className="rounded-2xl border border-zinc-950 bg-zinc-950 p-4 text-white">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-white/50">
+                        One-time temporary password
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <code className="min-w-0 flex-1 overflow-x-auto rounded-lg bg-white/10 p-2 text-sm">
+                          {temporaryPassword}
+                        </code>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(
+                              temporaryPassword
+                            );
+                            toast.success("Password copied");
+                          }}
+                          className="rounded-lg"
+                        >
+                          <Clipboard className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-white/50">
+                        Share securely. The user must replace it after signing
+                        in, and old sessions are revoked.
+                      </p>
+                    </div>
+                  )}
+                </section>
+
+                <section className="lg:col-span-2">
+                  <h3 className="flex items-center gap-2 font-display">
+                    <Sparkles className="h-4 w-4" /> Recent generation activity
+                  </h3>
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-zinc-200">
+                    <div className="grid grid-cols-4 bg-zinc-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                      <span>Job</span>
+                      <span>Status</span>
+                      <span>Format</span>
+                      <span>Created</span>
+                    </div>
+                    {selected.recentJobs.length ? (
+                      selected.recentJobs.map(job => (
+                        <div
+                          key={job.id}
+                          className="grid grid-cols-4 border-t border-zinc-100 px-4 py-3 text-xs"
+                        >
+                          <span>#{job.id}</span>
+                          <span className="capitalize">{job.status}</span>
+                          <span>
+                            {job.resolution} · {job.aspectRatio}
+                          </span>
+                          <span className="text-zinc-400">
+                            {formatDate(job.createdAt)}
+                          </span>
+                        </div>
+                      ))
                     ) : (
-                      <p className="rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">
-                        No administrative actions for this user.
+                      <p className="p-5 text-center text-sm text-zinc-400">
+                        No generation activity yet.
                       </p>
                     )}
                   </div>
-                </>
-              ) : (
-                <p className="py-12 text-center text-sm text-muted-foreground">
-                  Select a user to view details.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </main>
-
-      <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Set a temporary password</DialogTitle>
-            <DialogDescription>
-              This replaces the current password, revokes every session, and
-              forces a password change at the next sign-in.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <label className="text-sm font-medium" htmlFor="temporary-password">
-              Temporary password
-            </label>
-            <div className="flex gap-2">
-              <Input
-                id="temporary-password"
-                type="text"
-                autoComplete="off"
-                value={temporaryPassword}
-                onChange={event => setTemporaryPassword(event.target.value)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => void copyPassword()}
-                aria-label="Copy temporary password"
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
+                  <div className="mt-3 flex flex-wrap gap-4 text-xs text-zinc-400">
+                    <span>{selected.projectCount} projects</span>
+                    <span>{selected.imageCount} uploaded images</span>
+                    <span>
+                      Last signed in {formatDate(selected.lastSignedIn)}
+                    </span>
+                  </div>
+                </section>
+              </div>
             </div>
-            <p
-              className={cn(
-                "text-xs",
-                temporaryPassword.length >= 12
-                  ? "text-muted-foreground"
-                  : "text-destructive"
-              )}
-            >
-              At least 12 characters. Share it once through a secure channel; it
-              is never retrievable from the server.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPasswordDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={
-                temporaryPassword.length < 12 ||
-                passwordMutation.isPending ||
-                !selectedUserId ||
-                selectedUserId === user.id
-              }
-              onClick={() =>
-                selectedUserId &&
-                passwordMutation.mutate({
-                  userId: selectedUserId,
-                  temporaryPassword,
-                })
-              }
-            >
-              {passwordMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}{" "}
-              Set temporary password
-            </Button>
-          </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
     </div>

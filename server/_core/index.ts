@@ -55,11 +55,7 @@ async function startServer() {
   app.post("/api/billing/checkout", async (req, res) => {
     try {
       const user = await sdk.authenticateRequest(req);
-      if (!user) {
-        res.status(401).json({ error: "Please sign in first" });
-        return;
-      }
-      if (user.mustChangePassword) {
+      if (!user || user.forcePasswordChange) {
         res
           .status(403)
           .json({ error: "Change your temporary password before continuing" });
@@ -77,11 +73,7 @@ async function startServer() {
   app.post("/api/billing/additional-video", async (req, res) => {
     try {
       const user = await sdk.authenticateRequest(req);
-      if (!user) {
-        res.status(401).json({ error: "Please sign in first" });
-        return;
-      }
-      if (user.mustChangePassword) {
+      if (!user || user.forcePasswordChange) {
         res
           .status(403)
           .json({ error: "Change your temporary password before continuing" });
@@ -98,11 +90,7 @@ async function startServer() {
   app.post("/api/billing/portal", async (req, res) => {
     try {
       const user = await sdk.authenticateRequest(req);
-      if (!user) {
-        res.status(401).json({ error: "Please sign in first" });
-        return;
-      }
-      if (user.mustChangePassword) {
+      if (!user || user.forcePasswordChange) {
         res
           .status(403)
           .json({ error: "Change your temporary password before continuing" });

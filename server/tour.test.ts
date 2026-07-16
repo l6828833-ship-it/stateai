@@ -6,20 +6,8 @@ describe("tour configuration", () => {
     expect([...TOUR_STYLES]).toEqual(["Walkthrough", "Drone", "Cinematic"]);
   });
 
-  it("caps uploads at the six-image plan limit", () => {
+  it("caps uploads at the six images promised by every plan", () => {
     expect(MAX_IMAGES).toBe(6);
-  });
-});
-
-describe("tour duration", () => {
-  it("keeps up to five Kling segments within 15 seconds", async () => {
-    const { capTourSegmentDurations } = await import("./routers/tour");
-    const durations = capTourSegmentDurations([6, 6, 6, 6, 6]);
-    expect(durations).toHaveLength(5);
-    expect(durations.every(duration => duration >= 3 && duration <= 6)).toBe(
-      true
-    );
-    expect(durations.reduce((sum, duration) => sum + duration, 0)).toBe(15);
   });
 });
 

@@ -54,6 +54,7 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   google_token: "Couldn't complete Google sign-in. Please try again.",
   google_userinfo: "Couldn't read your Google profile. Please try again.",
   google: "Google sign-in failed. Please try again.",
+  account_disabled: "This account is disabled. Contact an administrator.",
 };
 
 export default function Auth({
@@ -97,12 +98,8 @@ export default function Auth({
     return () => clearInterval(t);
   }, [cooldown]);
 
-  const finishAuthed = async () => {
-    await utils.auth.me.invalidate();
-    const currentUser = await utils.auth.me.fetch();
-    navigate(
-      currentUser?.mustChangePassword ? "/change-password" : "/dashboard"
-    );
+  const finishAuthed = () => {
+    navigate("/dashboard");
   };
 
   const signupMutation = trpc.auth.signup.useMutation({
@@ -117,7 +114,7 @@ export default function Auth({
   });
 
   const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: async res => {
+    onSuccess: res => {
       if (res.needsVerification) {
         setPurpose("login");
         setCode("");
@@ -126,16 +123,21 @@ export default function Auth({
         toast("Verify your email to continue — we sent you a code.");
         return;
       }
+      // Seed the auth query before navigating. Invalidating an inactive cached
+      // `me: null` query and navigating immediately lets the dashboard guard
+      // redirect back to login before the background refetch completes.
+      utils.auth.me.setData(undefined, res.user);
       toast.success("Welcome back!");
-      await finishAuthed();
+      finishAuthed();
     },
     onError: e => setError(e.message),
   });
 
   const verifyMutation = trpc.auth.verifyOtp.useMutation({
-    onSuccess: async () => {
+    onSuccess: res => {
+      utils.auth.me.setData(undefined, res.user);
       toast.success("Email verified — you're in!");
-      await finishAuthed();
+      finishAuthed();
     },
     onError: e => setError(e.message),
   });

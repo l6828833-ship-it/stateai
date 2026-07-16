@@ -1,7 +1,5 @@
-import { relations } from "drizzle-orm";
 import {
   boolean,
-  index,
   integer,
   pgEnum,
   pgTable,
@@ -16,10 +14,6 @@ import {
  * applies (e.g. tourStyle in both projects and generation_jobs).
  */
 export const roleEnum = pgEnum("role", ["user", "admin"]);
-export const accountStatusEnum = pgEnum("account_status", [
-  "active",
-  "disabled",
-]);
 export const tourStyleEnum = pgEnum("tour_style", [
   "Walkthrough",
   "Drone",
@@ -36,16 +30,18 @@ export const authPurposeEnum = pgEnum("auth_purpose", [
   "reset",
 ]);
 export const planEnum = pgEnum("plan", [
+  // Current customer-facing plans (three tiers × monthly/yearly).
+  "starter_monthly",
+  "starter_yearly",
+  "creator_monthly",
+  "creator_yearly",
+  "studio_monthly",
+  "studio_yearly",
+  // Legacy values remain valid for existing Stripe subscriptions.
   "starter",
   "pro",
   "annual",
   "business",
-  "starter_monthly",
-  "creator_monthly",
-  "studio_monthly",
-  "starter_yearly",
-  "creator_yearly",
-  "studio_yearly",
 ]);
 
 /**
@@ -69,9 +65,12 @@ export const users = pgTable("users", {
   /** When the user's email was verified via OTP. Null = unverified. */
   emailVerified: timestamp("emailVerified"),
   role: roleEnum("role").default("user").notNull(),
-  accountStatus: accountStatusEnum("accountStatus").default("active").notNull(),
+  /** Disabled accounts cannot create or continue sessions. */
+  disabledAt: timestamp("disabledAt"),
+  /** Admin-issued temporary passwords must be replaced after sign-in. */
+  forcePasswordChange: boolean("forcePasswordChange").default(false).notNull(),
+  /** Included in session JWTs; incrementing it revokes every existing session. */
   sessionVersion: integer("sessionVersion").default(0).notNull(),
-  mustChangePassword: boolean("mustChangePassword").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -82,101 +81,6 @@ export const users = pgTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
-
-/** Append-only security log for all administrator mutations. */
-export const adminAuditLogs = pgTable(
-  "admin_audit_logs",
-  {
-    id: serial("id").primaryKey(),
-    adminId: integer("adminId")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
-    targetUserId: integer("targetUserId").references(() => users.id, {
-      onDelete: "set null",
-    }),
-    action: varchar("action", { length: 96 }).notNull(),
-    /** JSON serialized by the server; audit rows are append-only. */
-    metadata: text("metadata").notNull().default("{}"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  table => [
-    index("admin_audit_admin_created_idx").on(table.adminId, table.createdAt),
-    index("admin_audit_target_created_idx").on(
-      table.targetUserId,
-      table.createdAt
-    ),
-  ]
-);
-
-export const usageAdjustments = pgTable(
-  "usage_adjustments",
-  {
-    id: serial("id").primaryKey(),
-    userId: integer("userId")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
-    adminId: integer("adminId")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
-    /** Positive values consume allowance; negative values restore allowance. */
-    delta: integer("delta").notNull(),
-    reason: varchar("reason", { length: 255 }).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  table => [
-    index("usage_adjustment_user_created_idx").on(
-      table.userId,
-      table.createdAt
-    ),
-    index("usage_adjustment_admin_created_idx").on(
-      table.adminId,
-      table.createdAt
-    ),
-  ]
-);
-
-export const usersRelations = relations(users, ({ many }) => ({
-  auditsPerformed: many(adminAuditLogs, { relationName: "auditAdmin" }),
-  auditsReceived: many(adminAuditLogs, { relationName: "auditTarget" }),
-  usageAdjustmentsMade: many(usageAdjustments, { relationName: "usageAdmin" }),
-  usageAdjustmentsReceived: many(usageAdjustments, {
-    relationName: "usageUser",
-  }),
-}));
-
-export const adminAuditLogsRelations = relations(adminAuditLogs, ({ one }) => ({
-  admin: one(users, {
-    fields: [adminAuditLogs.adminId],
-    references: [users.id],
-    relationName: "auditAdmin",
-  }),
-  targetUser: one(users, {
-    fields: [adminAuditLogs.targetUserId],
-    references: [users.id],
-    relationName: "auditTarget",
-  }),
-}));
-
-export const usageAdjustmentsRelations = relations(
-  usageAdjustments,
-  ({ one }) => ({
-    admin: one(users, {
-      fields: [usageAdjustments.adminId],
-      references: [users.id],
-      relationName: "usageAdmin",
-    }),
-    user: one(users, {
-      fields: [usageAdjustments.userId],
-      references: [users.id],
-      relationName: "usageUser",
-    }),
-  })
-);
-
-export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
-export type InsertAdminAuditLog = typeof adminAuditLogs.$inferInsert;
-export type UsageAdjustment = typeof usageAdjustments.$inferSelect;
-export type InsertUsageAdjustment = typeof usageAdjustments.$inferInsert;
 
 /**
  * One-time email verification / login codes (OTP). Codes are stored hashed
@@ -293,8 +197,8 @@ export type GenerationJob = typeof generationJobs.$inferSelect;
 export type InsertGenerationJob = typeof generationJobs.$inferInsert;
 
 /**
- * Current checkout plans use the six v3 plan ids. Legacy enum values remain
- * valid so existing v1/v2 subscriptions continue to deserialize safely.
+ * Stripe subscription state per user. Current customer-facing plans use three
+ * tiers with monthly/yearly variants; legacy enum values remain readable.
  */
 export const subscriptions = pgTable("subscriptions", {
   id: serial("id").primaryKey(),
@@ -303,6 +207,17 @@ export const subscriptions = pgTable("subscriptions", {
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
   plan: planEnum("plan"),
   status: varchar("status", { length: 32 }).default("inactive").notNull(),
+  /** Durable checkout reservation state, isolated from webhook-managed status. */
+  checkoutReservationKey: varchar("checkoutReservationKey", { length: 128 }),
+  checkoutPlanId: varchar("checkoutPlanId", { length: 64 }),
+  checkoutReservedAt: timestamp("checkoutReservedAt"),
+  checkoutExpiresAt: timestamp("checkoutExpiresAt"),
+  checkoutSessionId: varchar("checkoutSessionId", { length: 128 }),
+  /** Admin-granted or removed generations for the active billing period. */
+  usageAdjustment: integer("usageAdjustment").default(0).notNull(),
+  /** Period this adjustment belongs to; prevents grants leaking into renewals. */
+  usageAdjustmentPeriodEnd: timestamp("usageAdjustmentPeriodEnd"),
+  currentPeriodStart: timestamp("currentPeriodStart"),
   currentPeriodEnd: timestamp("currentPeriodEnd"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
@@ -313,3 +228,22 @@ export const subscriptions = pgTable("subscriptions", {
 
 export type Subscription = typeof subscriptions.$inferSelect;
 export type InsertSubscription = typeof subscriptions.$inferInsert;
+
+/**
+ * Append-only history of every privileged admin action. The migration installs
+ * a database trigger that rejects UPDATE and DELETE, making this immutable even
+ * if a future application bug attempts to alter history.
+ */
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: serial("id").primaryKey(),
+  actorUserId: integer("actorUserId").notNull(),
+  targetUserId: integer("targetUserId"),
+  action: varchar("action", { length: 64 }).notNull(),
+  details: text("details").notNull(),
+  ipAddress: varchar("ipAddress", { length: 64 }),
+  userAgent: text("userAgent"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
+export type InsertAdminAuditLog = typeof adminAuditLogs.$inferInsert;

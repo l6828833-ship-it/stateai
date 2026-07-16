@@ -12,13 +12,12 @@ import {
   History,
   Home,
   LogOut,
-  Sparkles,
   ShieldCheck,
+  Sparkles,
   X,
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ADDITIONAL_VIDEO_PRICE_USD } from "@shared/plans";
 
 interface DashboardSidebarProps {
   isOpen?: boolean;
@@ -64,9 +63,6 @@ export default function DashboardSidebar({
       id: "analytics",
       section: "analytics",
     },
-    ...(user?.role === "admin"
-      ? [{ icon: ShieldCheck, label: "Admin", id: "admin", section: "admin" }]
-      : []),
   ];
 
   const handleLogout = async () => {
@@ -76,7 +72,9 @@ export default function DashboardSidebar({
 
   const planLabel = subscribed
     ? currentPlan
-      ? currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1) + " Plan"
+      ? currentPlan
+          .replaceAll("_", " ")
+          .replace(/\b\w/g, letter => letter.toUpperCase()) + " Plan"
       : "Active Plan"
     : "Free Account";
 
@@ -152,11 +150,7 @@ export default function DashboardSidebar({
                 <button
                   key={item.id}
                   onClick={() => {
-                    if (item.id === "admin") {
-                      navigate("/admin");
-                    } else {
-                      onNavigate?.(item.section);
-                    }
+                    onNavigate?.(item.section);
                     onClose?.();
                   }}
                   className={cn(
@@ -179,6 +173,18 @@ export default function DashboardSidebar({
                 </button>
               );
             })}
+            {user?.role === "admin" && (
+              <button
+                onClick={() => navigate("/admin")}
+                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-zinc-900 hover:text-white"
+              >
+                <ShieldCheck className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
+                <span>Admin Console</span>
+                <span className="ml-auto rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-bold uppercase text-zinc-700 group-hover:bg-white/15 group-hover:text-white">
+                  Admin
+                </span>
+              </button>
+            )}
           </nav>
 
           {/* Quick Stats */}
@@ -241,8 +247,7 @@ export default function DashboardSidebar({
                   className="btn-springy w-full rounded-full"
                   onClick={onBuyAdditionalVideo}
                 >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $
-                  {ADDITIONAL_VIDEO_PRICE_USD}
+                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $17
                 </Button>
                 <Button
                   variant="outline"

@@ -7,9 +7,9 @@ import { tourRouter } from "./routers/tour";
 export const appRouter = router({
   // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
+  admin: adminRouter,
   auth: authRouter,
   tour: tourRouter,
-  admin: adminRouter,
 });
 
 export type AppRouter = typeof appRouter;

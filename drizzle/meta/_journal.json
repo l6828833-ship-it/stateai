@@ -12,8 +12,15 @@
     {
       "idx": 1,
       "version": "7",
-      "when": 1784207394539,
-      "tag": "0001_admin_billing_foundation",
+      "when": 1784201000000,
+      "tag": "0001_admin_console",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784204000000,
+      "tag": "0002_checkout_reservations",
       "breakpoints": true
     }
   ]

@@ -5,16 +5,15 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_SIZE_MB,
   MAX_IMAGES,
+  type PlanId,
 } from "@shared/plans";
 import * as db from "../db";
 import {
   analyzeAndOptimizePrompt,
   assertInworldConfigured,
   buildFallbackPrompt,
-  clampSegmentDuration,
   defaultDurationFor,
-  MAX_CLIP_DURATION,
-  SEGMENT_MIN_DURATION,
+  normalizeSegmentDurations,
 } from "../inworld";
 import {
   assertKlingConfigured,
@@ -36,27 +35,11 @@ import {
   getStripeGenerationEntitlement,
   verifyAdditionalVideoCheckout,
 } from "../billing";
-import { protectedProcedure, router } from "../_core/trpc";
+import { appProcedure, router } from "../_core/trpc";
 
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
-
-/** Keep the stitched tour within the advertised 15-second product limit. */
-export function capTourSegmentDurations(durations: number[]): number[] {
-  const capped = durations.map(duration => clampSegmentDuration(duration));
-  let total = capped.reduce((sum, duration) => sum + duration, 0);
-  let cursor = 0;
-  while (total > MAX_CLIP_DURATION) {
-    if (capped.every(duration => duration <= SEGMENT_MIN_DURATION)) break;
-    if (capped[cursor] > SEGMENT_MIN_DURATION) {
-      capped[cursor] -= 1;
-      total -= 1;
-    }
-    cursor = (cursor + 1) % capped.length;
-  }
-  return capped;
-}
 
 function decodeCanonicalBase64(value: string): Buffer | null {
   if (value.length === 0 || value.length % 4 !== 0) return null;
@@ -384,7 +367,7 @@ async function toPublicOrderedImages(
 
 export const tourRouter = router({
   /** Full tool state: active project + strictly ordered images + subscription flag. */
-  getState: protectedProcedure.query(async ({ ctx }) => {
+  getState: appProcedure.query(async ({ ctx }) => {
     const storedProject = await db.getOrCreateActiveProject(ctx.user.id);
     const project = isVideoAspectRatio(storedProject.aspectRatio)
       ? storedProject
@@ -411,7 +394,7 @@ export const tourRouter = router({
     };
   }),
 
-  updateSettings: protectedProcedure
+  updateSettings: appProcedure
     .input(
       z.object({
         projectId: z.number(),
@@ -436,7 +419,7 @@ export const tourRouter = router({
    * The index is appended at the end (max+1) atomically per-request, so the
    * uploaded order can never collide even with concurrent uploads.
    */
-  uploadImage: protectedProcedure
+  uploadImage: appProcedure
     .input(
       z.object({
         projectId: z.number(),
@@ -518,7 +501,7 @@ export const tourRouter = router({
     }),
 
   /** Reorder: array index = new sequenceIndex. Set must match exactly. */
-  reorderImages: protectedProcedure
+  reorderImages: appProcedure
     .input(
       z.object({
         projectId: z.number(),
@@ -547,14 +530,14 @@ export const tourRouter = router({
       return { success: true } as const;
     }),
 
-  deleteImage: protectedProcedure
+  deleteImage: appProcedure
     .input(z.object({ imageId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       await db.deleteProjectImage(input.imageId, ctx.user.id);
       return { success: true } as const;
     }),
 
-  updateRoomTag: protectedProcedure
+  updateRoomTag: appProcedure
     .input(z.object({ imageId: z.number(), roomTag: z.string().max(64) }))
     .mutation(async ({ ctx, input }) => {
       await db.updateImageRoomTag(input.imageId, ctx.user.id, input.roomTag);
@@ -569,7 +552,7 @@ export const tourRouter = router({
    *   3. hidden LLM analysis/prompt optimization (never returned to client)
    *   4. submit an official Kling 3.0 image-to-video task and persist its id
    */
-  generate: protectedProcedure
+  generate: appProcedure
     .input(
       z.object({
         projectId: z.number(),
@@ -669,9 +652,10 @@ export const tourRouter = router({
 
       let billingEntitlement:
         | {
-            usageWindowStart: Date;
+            periodStart: Date;
+            periodEnd: Date;
             enforceAllowance: boolean;
-            allowance?: number;
+            planId?: PlanId;
           }
         | undefined;
       try {
@@ -758,10 +742,11 @@ export const tourRouter = router({
         // and optional last frame per task). Segments are polled and stitched
         // back together later. One image → one single-frame segment.
         const segments = planKlingSegments(orderedPublic);
-        // The AI picks each shot's length (3–6s). Reduce longer shots in a
-        // deterministic round-robin so the stitched result never exceeds 15s.
-        const durations = capTourSegmentDurations(
-          segments.map(segment => segmentDurations[segment.index])
+        // Normalize defensively so the complete stitched video stays at or
+        // below the product-wide 15-second limit.
+        const durations = normalizeSegmentDurations(
+          segments.map(segment => segmentDurations[segment.index]),
+          segments.length
         );
         const totalDuration = durations.reduce((sum, value) => sum + value, 0);
 
@@ -835,7 +820,7 @@ export const tourRouter = router({
    *   succeeded, their videos are downloaded in order, concatenated into one
    *   MP4, and archived. A single failed segment fails the whole job.
    */
-  pollJob: protectedProcedure
+  pollJob: appProcedure
     .input(z.object({ jobId: z.number() }))
     .query(async ({ ctx, input }) => {
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
@@ -958,7 +943,7 @@ export const tourRouter = router({
     }),
 
   /** All of the user's jobs, newest first (history view). */
-  listJobs: protectedProcedure.query(async ({ ctx }) => {
+  listJobs: appProcedure.query(async ({ ctx }) => {
     const [jobs, subscribed] = await Promise.all([
       db.listGenerationJobs(ctx.user.id),
       db.hasActiveSubscription(ctx.user.id),
@@ -967,7 +952,7 @@ export const tourRouter = router({
   }),
 
   /** Signed download URL for a ready video — subscription required. */
-  getDownloadUrl: protectedProcedure
+  getDownloadUrl: appProcedure
     .input(z.object({ jobId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const subscribed = await db.hasActiveSubscription(ctx.user.id);

@@ -1,364 +1,250 @@
 import { TRPCError } from "@trpc/server";
-import { PLAN_BY_ID, type PlanId } from "@shared/plans";
+import { nanoid } from "nanoid";
 import { z } from "zod";
-import * as db from "../db";
-import {
-  ensurePrice,
-  getStripe,
-  getStripeGenerationEntitlement,
-} from "../billing";
+import { PLANS, isPlanId, type PlanId } from "@shared/plans";
+import type { TrpcContext } from "../_core/context";
 import { hashPassword } from "../_core/password";
 import { adminProcedure, router } from "../_core/trpc";
+import {
+  changeSubscriptionPlan,
+  getStripeGenerationEntitlement,
+} from "../billing";
+import * as db from "../db";
 
-const userIdSchema = z.number().int().positive();
-const planIdSchema = z.enum([
-  "starter_monthly",
-  "creator_monthly",
-  "studio_monthly",
-  "starter_yearly",
-  "creator_yearly",
-  "studio_yearly",
-]);
-
-function adminMutationError(error: unknown): never {
-  const message = error instanceof Error ? error.message : "";
-  const knownErrors: Record<
-    string,
-    { code: "NOT_FOUND" | "CONFLICT" | "BAD_REQUEST"; message: string }
-  > = {
-    USER_NOT_FOUND: { code: "NOT_FOUND", message: "User not found." },
-    LAST_ACTIVE_ADMIN: {
-      code: "CONFLICT",
-      message: "The last active administrator cannot be disabled or demoted.",
-    },
-    SELF_DISABLE: {
-      code: "BAD_REQUEST",
-      message: "You cannot disable your own account.",
-    },
-    SELF_DEMOTION: {
-      code: "BAD_REQUEST",
-      message: "You cannot remove your own administrator role.",
-    },
-    SELF_PASSWORD_RESET: {
-      code: "BAD_REQUEST",
-      message:
-        "Administrators cannot replace their own password here. Use the normal password-change flow.",
-    },
+function requestContext(ctx: TrpcContext) {
+  const userAgent = ctx.req.headers["user-agent"];
+  return {
+    // Express derives this from trusted connection/proxy configuration.
+    ipAddress: ctx.req.ip || ctx.req.socket.remoteAddress || null,
+    userAgent: typeof userAgent === "string" ? userAgent.slice(0, 1000) : null,
   };
-  const known = knownErrors[message];
-  if (known) throw new TRPCError(known);
-  throw error;
+}
+
+function adminError(error: unknown): never {
+  const message =
+    error instanceof Error ? error.message : "The admin action failed";
+  throw new TRPCError({ code: "BAD_REQUEST", message });
+}
+
+const userIdInput = z.object({ userId: z.number().int().positive() });
+
+async function refreshMissingSubscriptionPeriods(
+  items: Array<{
+    id: number;
+    stripeSubscriptionId: string | null;
+    currentPeriodStart: Date | null;
+  }>
+): Promise<boolean> {
+  let refreshed = false;
+  await Promise.all(
+    items
+      .filter(item => item.stripeSubscriptionId && !item.currentPeriodStart)
+      .map(async item => {
+        try {
+          const entitlement = await getStripeGenerationEntitlement(item.id);
+          if (!entitlement) return;
+          await db.upsertSubscription(item.id, {
+            currentPeriodStart: entitlement.periodStart,
+            currentPeriodEnd: entitlement.periodEnd,
+          });
+          refreshed = true;
+        } catch (error) {
+          console.warn("[Admin] Could not refresh Stripe billing period", {
+            userId: item.id,
+            error,
+          });
+        }
+      })
+  );
+  return refreshed;
 }
 
 export const adminRouter = router({
+  overview: adminProcedure.query(async () => {
+    const result = await db.listUsersForAdmin({ page: 1, pageSize: 1 });
+    return result.overview;
+  }),
+
   listUsers: adminProcedure
     .input(
       z.object({
         page: z.number().int().min(1).default(1),
-        pageSize: z.number().int().min(5).max(100).default(20),
-        search: z.string().trim().max(120).optional(),
+        pageSize: z.number().int().min(5).max(50).default(20),
+        search: z.string().trim().max(320).optional(),
+        role: z.enum(["all", "user", "admin"]).default("all"),
+        accountStatus: z.enum(["all", "active", "disabled"]).default("all"),
       })
     )
     .query(async ({ input }) => {
-      if (input.search && /^\d+$/.test(input.search)) {
-        const details = await db.getUserDetailsForAdmin(Number(input.search));
-        if (!details) return { rows: [], total: 0 };
-        return {
-          rows: [
-            {
-              id: details.user.id,
-              openId: details.user.openId,
-              name: details.user.name,
-              email: details.user.email,
-              loginMethod: details.user.loginMethod,
-              emailVerified: details.user.emailVerified,
-              role: details.user.role,
-              accountStatus: details.user.accountStatus,
-              mustChangePassword: details.user.mustChangePassword,
-              createdAt: details.user.createdAt,
-              updatedAt: details.user.updatedAt,
-              lastSignedIn: details.user.lastSignedIn,
-              subscriptionPlan: details.subscription?.plan ?? null,
-              subscriptionStatus: details.subscription?.status ?? null,
-            },
-          ],
-          total: 1,
-        };
-      }
-      return db.listUsersForAdmin(input);
+      const result = await db.listUsersForAdmin(input);
+      return (await refreshMissingSubscriptionPeriods(result.items))
+        ? db.listUsersForAdmin(input)
+        : result;
     }),
 
-  userDetails: adminProcedure
-    .input(z.object({ userId: userIdSchema }))
-    .query(async ({ input }) => {
-      let usageWindowStart: Date | undefined;
-      try {
-        usageWindowStart = (await getStripeGenerationEntitlement(input.userId))
-          ?.usageWindowStart;
-      } catch (error) {
-        console.warn("[Admin] Could not resolve Stripe usage window", error);
-      }
-      const details = await db.getUserDetailsForAdmin(
-        input.userId,
-        usageWindowStart
-      );
-      if (!details)
-        throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
-      return details;
-    }),
+  getUser: adminProcedure.input(userIdInput).query(async ({ input }) => {
+    let user = await db.getUserForAdmin(input.userId);
+    if (!user)
+      throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    if (await refreshMissingSubscriptionPeriods([user])) {
+      user = await db.getUserForAdmin(input.userId);
+    }
+    if (!user)
+      throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    return user;
+  }),
 
-  setAccountStatus: adminProcedure
+  listAuditLogs: adminProcedure
     .input(
       z.object({
-        userId: userIdSchema,
-        status: z.enum(["active", "disabled"]),
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(10).max(100).default(30),
       })
     )
+    .query(({ input }) => db.listAdminAuditLogs(input)),
+
+  availablePlans: adminProcedure.query(() =>
+    PLANS.map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      interval: plan.interval,
+      priceLabel: plan.priceLabel,
+      videoAllowance: plan.videoAllowance,
+    }))
+  ),
+
+  setAccountDisabled: adminProcedure
+    .input(userIdInput.extend({ disabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       try {
-        await db.setUserAccountStatusByAdmin({
-          adminId: ctx.user.id,
+        await db.setAccountDisabledByAdmin({
+          actorUserId: ctx.user.id,
           targetUserId: input.userId,
-          status: input.status,
+          disabled: input.disabled,
+          context: requestContext(ctx),
         });
-        return { success: true } as const;
+        return { ok: true } as const;
       } catch (error) {
-        adminMutationError(error);
+        adminError(error);
       }
     }),
 
   setRole: adminProcedure
-    .input(
-      z.object({
-        userId: userIdSchema,
-        role: z.enum(["user", "admin"]),
-      })
-    )
+    .input(userIdInput.extend({ role: z.enum(["user", "admin"]) }))
     .mutation(async ({ ctx, input }) => {
       try {
         await db.setUserRoleByAdmin({
-          adminId: ctx.user.id,
+          actorUserId: ctx.user.id,
           targetUserId: input.userId,
           role: input.role,
+          context: requestContext(ctx),
         });
-        return { success: true } as const;
+        return { ok: true } as const;
       } catch (error) {
-        adminMutationError(error);
+        adminError(error);
+      }
+    }),
+
+  resetPassword: adminProcedure
+    .input(userIdInput)
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const temporaryPassword = `ET-${nanoid(20)}`;
+        await db.resetUserPasswordByAdmin({
+          actorUserId: ctx.user.id,
+          targetUserId: input.userId,
+          passwordHash: await hashPassword(temporaryPassword),
+          context: requestContext(ctx),
+        });
+        return {
+          ok: true,
+          temporaryPassword,
+          message:
+            "Share this one-time password securely. It will not be shown again.",
+        } as const;
+      } catch (error) {
+        adminError(error);
       }
     }),
 
   revokeSessions: adminProcedure
-    .input(z.object({ userId: userIdSchema }))
+    .input(userIdInput)
     .mutation(async ({ ctx, input }) => {
       try {
-        await db.revokeUserSessionsByAdmin(ctx.user.id, input.userId);
-        return { success: true } as const;
+        await db.revokeUserSessionsByAdmin({
+          actorUserId: ctx.user.id,
+          targetUserId: input.userId,
+          context: requestContext(ctx),
+        });
+        return { ok: true } as const;
       } catch (error) {
-        adminMutationError(error);
+        adminError(error);
+      }
+    }),
+
+  setUsageAdjustment: adminProcedure
+    .input(
+      userIdInput.extend({ adjustment: z.number().int().min(-1000).max(10000) })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        await db.setUsageAdjustmentByAdmin({
+          actorUserId: ctx.user.id,
+          targetUserId: input.userId,
+          adjustment: input.adjustment,
+          context: requestContext(ctx),
+        });
+        return { ok: true } as const;
+      } catch (error) {
+        adminError(error);
       }
     }),
 
   changePlan: adminProcedure
-    .input(z.object({ userId: userIdSchema, planId: planIdSchema }))
+    .input(userIdInput.extend({ planId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const stored = await db.getSubscription(input.userId);
-      if (!stored?.stripeSubscriptionId) {
+      if (!isPlanId(input.planId)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "This user does not have a Stripe subscription to change.",
+          message: "Unknown subscription plan",
         });
       }
-      if (stored.plan === input.planId) {
-        return { success: true, unchanged: true } as const;
-      }
-
-      await db.createAdminAudit({
-        adminId: ctx.user.id,
+      const context = requestContext(ctx);
+      // Persist intent before touching Stripe so every external billing mutation
+      // has an immutable record even if Stripe succeeds and DB synchronization fails.
+      await db.createAdminAuditLog({
+        actorUserId: ctx.user.id,
         targetUserId: input.userId,
-        action: "user.subscription_plan_change_requested",
-        metadata: {
-          from: stored.plan,
-          to: input.planId,
-          billing: "stripe",
-          proration: "immediate",
-        },
+        action: "subscription.plan_change_requested",
+        details: { planId: input.planId, source: "stripe" },
+        context,
       });
-
       try {
-        const stripe = getStripe();
-        const subscription = await stripe.subscriptions.retrieve(
-          stored.stripeSubscriptionId
-        );
-        const item = subscription.items.data[0];
-        if (!item || subscription.items.data.length !== 1) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "Only subscriptions with one plan item can be changed here.",
-          });
-        }
-
-        const priceId = await ensurePrice(input.planId as PlanId);
-        const updated = await stripe.subscriptions.update(subscription.id, {
-          items: [{ id: item.id, price: priceId, quantity: 1 }],
-          proration_behavior: "create_prorations",
-          payment_behavior: "error_if_incomplete",
-          metadata: {
-            ...subscription.metadata,
-            user_id: input.userId.toString(),
-            plan_id: input.planId,
-            changed_by_admin_id: ctx.user.id.toString(),
-          },
-        });
-        const periodEnd = updated.items.data[0]?.current_period_end;
-        try {
-          await db.createAdminAudit({
-            adminId: ctx.user.id,
-            targetUserId: input.userId,
-            action: "user.subscription_plan_changed_in_stripe",
-            metadata: {
-              from: stored.plan,
-              to: input.planId,
-              billing: "stripe",
-              proration: "immediate",
-            },
-          });
-        } catch (auditError) {
-          console.error(
-            "[Admin] Stripe succeeded but external-success audit failed:",
-            auditError
-          );
-        }
-
-        try {
-          await db.upsertSubscription(input.userId, {
-            plan: input.planId,
-            status: updated.status,
-            ...(periodEnd
-              ? { currentPeriodEnd: new Date(periodEnd * 1000) }
-              : {}),
-          });
-          await db.createAdminAudit({
-            adminId: ctx.user.id,
-            targetUserId: input.userId,
-            action: "user.subscription_plan_changed",
-            metadata: {
-              from: stored.plan,
-              to: input.planId,
-              billing: "stripe",
-              proration: "immediate",
-              amountUsd: PLAN_BY_ID[input.planId].totalPrice,
-            },
-          });
-          return {
-            success: true,
-            unchanged: false,
-            syncPending: false,
-          } as const;
-        } catch (syncError) {
-          console.error(
-            "[Admin] Stripe changed the plan but local sync is pending:",
-            syncError
-          );
-          try {
-            await db.createAdminAudit({
-              adminId: ctx.user.id,
-              targetUserId: input.userId,
-              action: "user.subscription_plan_sync_pending",
-              metadata: {
-                from: stored.plan,
-                to: input.planId,
-                billing: "stripe",
-              },
-            });
-          } catch (auditError) {
-            console.error(
-              "[Admin] Failed to record pending subscription sync:",
-              auditError
-            );
-          }
-          return {
-            success: true,
-            unchanged: false,
-            syncPending: true,
-          } as const;
-        }
-      } catch (error) {
-        console.error("[Admin] Stripe plan change failed:", error);
-        try {
-          await db.createAdminAudit({
-            adminId: ctx.user.id,
-            targetUserId: input.userId,
-            action: "user.subscription_plan_change_failed",
-            metadata: {
-              from: stored.plan,
-              to: input.planId,
-              billing: "stripe",
-            },
-          });
-        } catch (auditError) {
-          console.error(
-            "[Admin] Failed to record Stripe plan failure:",
-            auditError
-          );
-        }
-        if (error instanceof TRPCError) throw error;
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Stripe could not change this subscription. No local-only plan change was made.",
-        });
-      }
-    }),
-
-  adjustUsage: adminProcedure
-    .input(
-      z.object({
-        userId: userIdSchema,
-        delta: z
-          .number()
-          .int()
-          .min(-100)
-          .max(100)
-          .refine(value => value !== 0),
-        reason: z.string().trim().min(3).max(255),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const adjustment = await db.adjustUserUsageByAdmin({
-          adminId: ctx.user.id,
+        await changeSubscriptionPlan(input.userId, input.planId as PlanId);
+        await db.createAdminAuditLog({
+          actorUserId: ctx.user.id,
           targetUserId: input.userId,
-          delta: input.delta,
-          reason: input.reason,
+          action: "subscription.plan_change_completed",
+          details: { planId: input.planId, source: "stripe" },
+          context,
         });
-        return { success: true, adjustment } as const;
+        return { ok: true } as const;
       } catch (error) {
-        adminMutationError(error);
-      }
-    }),
-
-  issueTemporaryPassword: adminProcedure
-    .input(
-      z.object({
-        userId: userIdSchema,
-        temporaryPassword: z
-          .string()
-          .min(12, "Temporary passwords must contain at least 12 characters.")
-          .max(200),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const passwordHash = await hashPassword(input.temporaryPassword);
-      try {
-        await db.issueTemporaryPasswordByAdmin({
-          adminId: ctx.user.id,
-          targetUserId: input.userId,
-          passwordHash,
-        });
-        return { success: true, mustChangePassword: true } as const;
-      } catch (error) {
-        adminMutationError(error);
+        await db
+          .createAdminAuditLog({
+            actorUserId: ctx.user.id,
+            targetUserId: input.userId,
+            action: "subscription.plan_change_failed",
+            details: {
+              planId: input.planId,
+              source: "stripe",
+              error:
+                error instanceof Error ? error.message : "Unknown Stripe error",
+            },
+            context,
+          })
+          .catch(() => undefined);
+        adminError(error);
       }
     }),
 });

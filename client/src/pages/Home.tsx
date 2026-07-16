@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import PricingCards from "@/components/PricingCards";
 import TourTool, {
   type ToolImage,
   type ToolSettings,
@@ -8,7 +9,7 @@ import TourTool, {
 import { Button } from "@/components/ui/button";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
-import PricingTable from "@/components/PricingTable";
+import type { PlanId } from "@shared/plans";
 import {
   ArrowRight,
   Brain,
@@ -318,7 +319,7 @@ export default function Home() {
             onClick={() => scrollToSection("top")}
             className="flex items-center gap-2 font-display text-lg text-foreground"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
               <Clapperboard className="h-4 w-4" />
             </span>
             EstateTour AI
@@ -347,7 +348,7 @@ export default function Home() {
             {isAuthenticated ? (
               <Button
                 variant="default"
-                className="btn-springy rounded-full"
+                className="btn-springy rounded-full bg-zinc-950 text-white hover:bg-zinc-800"
                 onClick={() => navigate("/dashboard")}
               >
                 Dashboard <ArrowRight className="ml-1 h-4 w-4" />
@@ -362,7 +363,7 @@ export default function Home() {
                   Log in
                 </Button>
                 <Button
-                  className="btn-springy rounded-full"
+                  className="btn-springy rounded-full bg-zinc-950 text-white hover:bg-zinc-800"
                   onClick={scrollToTool}
                 >
                   Try it free
@@ -478,7 +479,7 @@ export default function Home() {
               <Button
                 size="lg"
                 onClick={scrollToTool}
-                className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
+                className="btn-springy rounded-full bg-zinc-950 px-8 py-6 text-base text-white shadow-xl shadow-zinc-950/20 hover:bg-zinc-800"
               >
                 Create my tour video <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
@@ -538,48 +539,54 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ===== The Tool ===== */}
-      <section id="tour-tool" className="relative scroll-mt-20 py-16 sm:py-20">
+      {/* ===== Interactive tool, intentionally directly below the hero ===== */}
+      <section
+        id="tour-tool"
+        className="relative scroll-mt-20 border-y border-zinc-200/70 bg-white/55 py-20"
+      >
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div
-            className="animate-blob-2 absolute left-[-8rem] top-[20%] h-[24rem] w-[24rem] rounded-full opacity-40 blur-3xl"
-            style={{
-              background:
-                "radial-gradient(circle, #F7B8D0 0%, transparent 70%)",
-            }}
-          />
+          <div className="absolute left-1/2 top-0 h-72 w-[44rem] -translate-x-1/2 rounded-full bg-primary/15 blur-3xl" />
         </div>
         <div className="container relative">
-          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
-            <span className="inline-flex rounded-full border border-primary/20 bg-accent/70 px-3 py-1 text-xs font-semibold text-primary">
-              Try the product
+          <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+            <span className="rounded-full bg-zinc-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
+              Build your first tour
             </span>
             <h2 className="mt-4 font-display text-3xl text-foreground sm:text-4xl">
-              Create your first tour below
+              Your AI video studio, ready now
             </h2>
-            <p className="mt-3 text-muted-foreground">
-              Upload photos, set the order, and choose a style. Your draft stays
-              ready while you create a free account.
+            <p className="mt-3 max-w-2xl text-muted-foreground">
+              Add up to six photos, arrange the story, and choose any social
+              ratio. Your exact draft follows you through sign-up.
             </p>
           </div>
           <div className="reveal-on-scroll mx-auto mt-10 max-w-4xl">
-            <div className="glass-panel rounded-[2rem] border border-primary/15 p-4 shadow-[0_24px_80px_rgba(79,46,64,0.12)] sm:p-8">
-              <TourTool
-                images={toolImages}
-                settings={settings}
-                onFilesAdded={handleFilesAdded}
-                onReorder={handleReorder}
-                onDelete={handleDelete}
-                onSettingsChange={handleSettingsChange}
-                onGenerate={handleGenerate}
-                generateLabel="Generate Tour Video"
-              />
+            <div className="rounded-[2rem] border border-zinc-200 bg-white/90 p-3 shadow-[0_30px_100px_-45px_rgba(24,24,27,.45)] sm:p-5">
+              <div className="rounded-[1.5rem] border border-primary/15 bg-[#fffafb] p-5 sm:p-8">
+                <TourTool
+                  images={toolImages}
+                  settings={settings}
+                  onFilesAdded={handleFilesAdded}
+                  onReorder={handleReorder}
+                  onDelete={handleDelete}
+                  onSettingsChange={handleSettingsChange}
+                  onGenerate={handleGenerate}
+                  generateLabel="Generate Tour Video"
+                />
+              </div>
             </div>
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-              No card required · photos and settings are preserved when you sign
-              up
-            </p>
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-zinc-500">
+              {[
+                "No card required",
+                "1080p high quality",
+                "Up to 15 seconds",
+                "Draft saved securely",
+              ].map(item => (
+                <span key={item} className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-zinc-900" /> {item}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -795,64 +802,91 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ===== Pricing Preview ===== */}
-      <section id="pricing" className="relative scroll-mt-24 py-24">
-        <div className="container">
+      {/* ===== Pricing ===== */}
+      <section
+        id="pricing"
+        className="relative scroll-mt-24 overflow-hidden py-24"
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(247,184,208,.2),transparent_46%)]" />
+        <div className="container relative">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
-            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
-              Simple, transparent pricing
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+              Pricing that scales
+            </span>
+            <h2 className="mt-3 font-display text-3xl text-foreground sm:text-4xl">
+              One studio. Three ways to grow.
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Choose yearly or monthly billing with clear video allowances and
-              no watermark.
+              Switch between monthly and yearly billing. Every tier includes
+              1080p video, all aspect ratios, viral effects, and no watermark.
             </p>
           </div>
-          <div className="reveal-on-scroll mx-auto mt-14 max-w-6xl">
-            <PricingTable
-              onSelectPlan={planId => {
-                sessionStorage.setItem("estatetour_pending_plan", planId);
-                navigate(isAuthenticated ? "/dashboard" : "/signup");
-              }}
-            />
-          </div>
+          <PricingCards
+            className="reveal-on-scroll mx-auto mt-12 max-w-6xl"
+            onSelectPlan={async (planId: PlanId) => {
+              if (!isAuthenticated) {
+                try {
+                  localStorage.setItem("estatetour_selected_plan", planId);
+                } catch {}
+                navigate("/signup");
+                return;
+              }
+              try {
+                const response = await fetch(
+                  `/api/billing/checkout?plan=${planId}`,
+                  { method: "POST" }
+                );
+                const data = (await response.json()) as {
+                  url?: string;
+                  error?: string;
+                };
+                if (data.url) window.location.href = data.url;
+                else toast.error(data.error || "Could not start checkout");
+              } catch {
+                toast.error(
+                  "Could not start checkout. Check your connection and try again."
+                );
+              }
+            }}
+          />
         </div>
       </section>
 
       {/* ===== CTA Banner ===== */}
-      <section className="relative py-24 text-center">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div
-            className="animate-blob-1 absolute right-[-6rem] top-[10%] h-[22rem] w-[22rem] rounded-full opacity-30 blur-3xl"
-            style={{
-              background:
-                "radial-gradient(circle, #E894B5 0%, transparent 70%)",
-            }}
-          />
-        </div>
-        <div className="container relative">
-          <h2 className="reveal-on-scroll font-display text-3xl text-foreground sm:text-4xl">
-            Ready to transform your listings?
-          </h2>
-          <p className="reveal-on-scroll mt-4 mx-auto max-w-xl text-muted-foreground">
-            Join hundreds of agents and brokers creating stunning property tours
-            in minutes.
-          </p>
-          <div className="reveal-on-scroll mt-8 flex flex-wrap items-center justify-center gap-4">
-            <Button
-              size="lg"
-              onClick={scrollToTool}
-              className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
-            >
-              Create your first tour <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="btn-springy rounded-full px-8 py-6"
-              onClick={() => scrollToSection("pricing")}
-            >
-              View pricing
-            </Button>
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll relative overflow-hidden rounded-[2.25rem] bg-zinc-950 px-6 py-14 text-center text-white shadow-[0_35px_100px_-45px_rgba(24,24,27,.8)] sm:px-12 sm:py-20">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(247,184,208,.28),transparent_32%),radial-gradient(circle_at_85%_90%,rgba(201,138,214,.2),transparent_34%)]" />
+            <div className="relative mx-auto max-w-2xl">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-medium text-white/70">
+                <Sparkles className="h-3.5 w-3.5" /> Your next listing can
+                launch today
+              </span>
+              <h2 className="mt-5 font-display text-3xl text-white sm:text-5xl">
+                Make every listing feel like a premiere.
+              </h2>
+              <p className="mx-auto mt-4 max-w-xl text-sm leading-6 text-white/55 sm:text-base">
+                Turn six photos into a polished, social-ready property
+                story—with no crew, editing timeline, or watermark.
+              </p>
+              <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  size="lg"
+                  onClick={scrollToTool}
+                  className="btn-springy rounded-full bg-white px-8 py-6 text-base text-zinc-950 hover:bg-zinc-200"
+                >
+                  Create your first tour <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="btn-springy rounded-full border-white/15 bg-white/10 px-8 py-6 text-white hover:bg-white/15 hover:text-white"
+                  onClick={() => scrollToSection("pricing")}
+                >
+                  Compare plans
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </section>

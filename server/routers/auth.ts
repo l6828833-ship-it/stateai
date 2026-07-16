@@ -149,10 +149,10 @@ export const authRouter = router({
           message: "Incorrect email or password.",
         });
       }
-      if (user.accountStatus !== "active") {
+      if (user.disabledAt) {
         throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Unable to sign in to this account.",
+          code: "FORBIDDEN",
+          message: "This account is disabled. Contact an administrator.",
         });
       }
       if (!user.passwordHash) {
@@ -223,10 +223,16 @@ export const authRouter = router({
       }
 
       const user = await db.getUserByEmail(input.email);
-      if (!user || user.accountStatus !== "active") {
+      if (!user) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Account not found.",
+        });
+      }
+      if (user.disabledAt) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This account is disabled. Contact an administrator.",
         });
       }
 
@@ -273,47 +279,56 @@ export const authRouter = router({
       return { ok: true, email: input.email } as const;
     }),
 
-  /** Change the signed-in user's password and rotate every existing session. */
+  /** Change a local password, clear a forced-change flag, and revoke other sessions. */
   changePassword: protectedProcedure
     .input(
-      z
-        .object({
-          currentPassword: z.string().min(1).max(200),
-          newPassword: passwordSchema.min(
-            12,
-            "New password must be at least 12 characters"
-          ),
-        })
-        .refine(input => input.newPassword !== input.currentPassword, {
-          path: ["newPassword"],
-          message: "Choose a password different from the temporary password",
-        })
+      z.object({
+        currentPassword: passwordSchema,
+        newPassword: passwordSchema,
+      })
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await db.getUserById(ctx.user.id);
-      if (
-        !current ||
-        current.accountStatus !== "active" ||
-        !(await verifyPassword(input.currentPassword, current.passwordHash))
-      ) {
+      if (!ctx.user.passwordHash) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This account does not currently use password sign-in.",
+        });
+      }
+      const matches = await verifyPassword(
+        input.currentPassword,
+        ctx.user.passwordHash
+      );
+      if (!matches) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
-          message: "The current password is incorrect.",
+          message: "Current password is incorrect.",
         });
       }
-      const passwordHash = await hashPassword(input.newPassword);
-      const updated = await db.changeOwnPassword(current.id, passwordHash);
-      if (!updated) {
+      if (input.currentPassword === input.newPassword) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "The password could not be changed.",
+          code: "BAD_REQUEST",
+          message:
+            "Choose a new password that differs from your current password.",
         });
       }
+      const updated = await db.changeOwnPassword(
+        ctx.user.id,
+        await hashPassword(input.newPassword)
+      );
+      if (!updated)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Account not found.",
+        });
       await establishSession(ctx, updated);
-      return {
-        ok: true,
-        mustChangePassword: false,
-        user: sanitizeUser(updated),
-      } as const;
+      return { ok: true, user: sanitizeUser(updated) } as const;
     }),
+
+  /** Revoke all sessions, including this one, and clear the local cookie. */
+  signOutEverywhere: protectedProcedure.mutation(async ({ ctx }) => {
+    await db.incrementUserSessionVersion(ctx.user.id);
+    const cookieOptions = getSessionCookieOptions(ctx.req);
+    ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+    return { ok: true } as const;
+  }),
 });

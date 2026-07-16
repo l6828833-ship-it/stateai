@@ -153,8 +153,8 @@ export function registerGoogleAuthRoutes(app: Express) {
         lastSignedIn: new Date(),
       });
       const user = await db.getUserByOpenId(openId);
-      if (!user || user.accountStatus !== "active") {
-        res.redirect("/login?error=account_unavailable");
+      if (!user || user.disabledAt) {
+        res.redirect("/login?error=account_disabled");
         return;
       }
       if (!user.emailVerified) {

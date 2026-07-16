@@ -16,12 +16,6 @@ const requireUser = t.middleware(async opts => {
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
   }
-  if (ctx.user.mustChangePassword && opts.path !== "auth.changePassword") {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "You must change your temporary password before continuing.",
-    });
-  }
 
   return next({
     ctx: {
@@ -33,18 +27,29 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
+/** Product procedures require a fully initialized account. */
+export const appProcedure = protectedProcedure.use(
+  t.middleware(async ({ ctx, next }) => {
+    if (ctx.user.forcePasswordChange) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Change your temporary password before continuing.",
+      });
+    }
+    return next({ ctx });
+  })
+);
+
 export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
-    if (!ctx.user || ctx.user.role !== "admin") {
+    if (
+      !ctx.user ||
+      ctx.user.role !== "admin" ||
+      ctx.user.forcePasswordChange
+    ) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
-    if (ctx.user.mustChangePassword) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "You must change your temporary password before continuing.",
-      });
     }
 
     return next({
