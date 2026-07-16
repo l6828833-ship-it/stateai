@@ -537,11 +537,22 @@ export default function Dashboard() {
     }
 
     if (!state?.subscribed && !pendingAdditionalVideo) {
-      setTheaterMode("idle");
-      toast.info(
-        "Choose a plan or buy one $17 pay-as-you-go video to generate."
-      );
-      handleOpenPricing();
+      // Free accounts get a local-only preview experience. Never call the
+      // generation mutation or spend provider credits from this branch.
+      if (theaterMode === "fake" && fakePreviewComplete) {
+        handleOpenPricing();
+        return;
+      }
+      if (theaterMode === "fake") return;
+
+      if (pricingTimerRef.current) {
+        clearTimeout(pricingTimerRef.current);
+        pricingTimerRef.current = null;
+      }
+      setFakePreviewComplete(false);
+      setActiveJobId(null);
+      setTheaterMode("fake");
+      revealOutputTheater();
       return;
     }
 
@@ -580,10 +591,12 @@ export default function Dashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    fakePreviewComplete,
     handleOpenPricing,
     pendingAdditionalVideo,
     project?.id,
     revealOutputTheater,
+    theaterMode,
   ]);
 
   const handleGenerateRef = useRef<typeof handleGenerate | null>(null);
@@ -1151,10 +1164,11 @@ export default function Dashboard() {
           )}
 
           {/* ===== CREATE SECTION ===== */}
-          {activeSection === "create" && (
+          {(activeSection === "create" || theaterMode === "fake") && (
             <div
               className={cn(
-                "grid min-w-0 gap-8",
+                activeSection === "create" ? "grid" : "hidden",
+                "min-w-0 gap-8",
                 theaterMode !== "idle" &&
                   "xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]"
               )}
