@@ -1,14 +1,48 @@
-import { integer, pgEnum, pgTable, serial, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  integer,
+  pgEnum,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  varchar,
+} from "drizzle-orm/pg-core";
 
 /**
  * Postgres enum types. Reused across tables where the same set of values
  * applies (e.g. tourStyle in both projects and generation_jobs).
  */
 export const roleEnum = pgEnum("role", ["user", "admin"]);
-export const tourStyleEnum = pgEnum("tour_style", ["Walkthrough", "Drone", "Cinematic"]);
-export const jobStatusEnum = pgEnum("job_status", ["processing", "ready", "failed"]);
-export const authPurposeEnum = pgEnum("auth_purpose", ["signup", "login", "reset"]);
-export const planEnum = pgEnum("plan", ["starter", "pro", "annual", "business"]);
+export const tourStyleEnum = pgEnum("tour_style", [
+  "Walkthrough",
+  "Drone",
+  "Cinematic",
+]);
+export const jobStatusEnum = pgEnum("job_status", [
+  "processing",
+  "ready",
+  "failed",
+]);
+export const authPurposeEnum = pgEnum("auth_purpose", [
+  "signup",
+  "login",
+  "reset",
+]);
+export const planEnum = pgEnum("plan", [
+  // Current customer-facing plans (three tiers × monthly/yearly).
+  "starter_monthly",
+  "starter_yearly",
+  "creator_monthly",
+  "creator_yearly",
+  "studio_monthly",
+  "studio_yearly",
+  // Legacy values remain valid for existing Stripe subscriptions.
+  "starter",
+  "pro",
+  "annual",
+  "business",
+]);
 
 /**
  * Core user table backing auth flow.
@@ -31,6 +65,12 @@ export const users = pgTable("users", {
   /** When the user's email was verified via OTP. Null = unverified. */
   emailVerified: timestamp("emailVerified"),
   role: roleEnum("role").default("user").notNull(),
+  /** Disabled accounts cannot create or continue sessions. */
+  disabledAt: timestamp("disabledAt"),
+  /** Admin-issued temporary passwords must be replaced after sign-in. */
+  forcePasswordChange: boolean("forcePasswordChange").default(false).notNull(),
+  /** Included in session JWTs; incrementing it revokes every existing session. */
+  sessionVersion: integer("sessionVersion").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -157,9 +197,8 @@ export type GenerationJob = typeof generationJobs.$inferSelect;
 export type InsertGenerationJob = typeof generationJobs.$inferInsert;
 
 /**
- * Stripe subscription state per user. Customer-facing checkout offers Yearly
- * (`annual`, $29/year) and Monthly (`pro`, $39/month). Legacy enum values stay
- * valid so existing subscriptions continue to deserialize safely.
+ * Stripe subscription state per user. Current customer-facing plans use three
+ * tiers with monthly/yearly variants; legacy enum values remain readable.
  */
 export const subscriptions = pgTable("subscriptions", {
   id: serial("id").primaryKey(),
@@ -168,6 +207,11 @@ export const subscriptions = pgTable("subscriptions", {
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
   plan: planEnum("plan"),
   status: varchar("status", { length: 32 }).default("inactive").notNull(),
+  /** Admin-granted or removed generations for the active billing period. */
+  usageAdjustment: integer("usageAdjustment").default(0).notNull(),
+  /** Period this adjustment belongs to; prevents grants leaking into renewals. */
+  usageAdjustmentPeriodEnd: timestamp("usageAdjustmentPeriodEnd"),
+  currentPeriodStart: timestamp("currentPeriodStart"),
   currentPeriodEnd: timestamp("currentPeriodEnd"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
@@ -178,3 +222,22 @@ export const subscriptions = pgTable("subscriptions", {
 
 export type Subscription = typeof subscriptions.$inferSelect;
 export type InsertSubscription = typeof subscriptions.$inferInsert;
+
+/**
+ * Append-only history of every privileged admin action. The migration installs
+ * a database trigger that rejects UPDATE and DELETE, making this immutable even
+ * if a future application bug attempts to alter history.
+ */
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: serial("id").primaryKey(),
+  actorUserId: integer("actorUserId").notNull(),
+  targetUserId: integer("targetUserId"),
+  action: varchar("action", { length: 64 }).notNull(),
+  details: text("details").notNull(),
+  ipAddress: varchar("ipAddress", { length: 64 }),
+  userAgent: text("userAgent"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
+export type InsertAdminAuditLog = typeof adminAuditLogs.$inferInsert;

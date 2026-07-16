@@ -1,4 +1,4 @@
-import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
+import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
@@ -27,11 +27,28 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
+/** Product procedures require a fully initialized account. */
+export const appProcedure = protectedProcedure.use(
+  t.middleware(async ({ ctx, next }) => {
+    if (ctx.user.forcePasswordChange) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Change your temporary password before continuing.",
+      });
+    }
+    return next({ ctx });
+  })
+);
+
 export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
-    if (!ctx.user || ctx.user.role !== 'admin') {
+    if (
+      !ctx.user ||
+      ctx.user.role !== "admin" ||
+      ctx.user.forcePasswordChange
+    ) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 
@@ -41,5 +58,5 @@ export const adminProcedure = t.procedure.use(
         user: ctx.user,
       },
     });
-  }),
+  })
 );

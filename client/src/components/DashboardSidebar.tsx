@@ -12,6 +12,7 @@ import {
   History,
   Home,
   LogOut,
+  ShieldCheck,
   Sparkles,
   X,
   Zap,
@@ -47,8 +48,8 @@ export default function DashboardSidebar({
 
   const stats = useMemo(() => {
     const jobs = jobsQuery.data ?? [];
-    const readyCount = jobs.filter((j) => j.status === "ready").length;
-    const processingCount = jobs.filter((j) => j.status === "processing").length;
+    const readyCount = jobs.filter(j => j.status === "ready").length;
+    const processingCount = jobs.filter(j => j.status === "processing").length;
     return { readyCount, processingCount, totalJobs: jobs.length };
   }, [jobsQuery.data]);
 
@@ -56,7 +57,12 @@ export default function DashboardSidebar({
     { icon: Home, label: "Dashboard", id: "dashboard", section: "create" },
     { icon: Film, label: "Create Tour", id: "create", section: "create" },
     { icon: History, label: "My Videos", id: "videos", section: "videos" },
-    { icon: BarChart3, label: "Analytics", id: "analytics", section: "analytics" },
+    {
+      icon: BarChart3,
+      label: "Analytics",
+      id: "analytics",
+      section: "analytics",
+    },
   ];
 
   const handleLogout = async () => {
@@ -66,7 +72,9 @@ export default function DashboardSidebar({
 
   const planLabel = subscribed
     ? currentPlan
-      ? currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1) + " Plan"
+      ? currentPlan
+          .replaceAll("_", " ")
+          .replace(/\b\w/g, letter => letter.toUpperCase()) + " Plan"
       : "Active Plan"
     : "Free Account";
 
@@ -84,18 +92,23 @@ export default function DashboardSidebar({
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-primary/15 bg-sidebar/80 backdrop-blur-xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
-          isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+          isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
         {/* Decorative glow */}
         <div
           className="pointer-events-none absolute -top-10 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full opacity-40 blur-3xl"
-          style={{ background: "radial-gradient(circle, #F7B8D0 0%, transparent 70%)" }}
+          style={{
+            background: "radial-gradient(circle, #F7B8D0 0%, transparent 70%)",
+          }}
         />
 
         {/* Header */}
         <div className="relative flex h-16 items-center justify-between px-5">
-          <a href="/" className="flex items-center gap-2 font-display text-lg text-foreground">
+          <a
+            href="/"
+            className="flex items-center gap-2 font-display text-lg text-foreground"
+          >
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
               <Clapperboard className="h-4 w-4" />
             </span>
@@ -117,8 +130,12 @@ export default function DashboardSidebar({
               {user?.name?.charAt(0).toUpperCase() ?? "U"}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">{user?.name ?? "User"}</p>
-              <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
+              <p className="truncate text-sm font-medium text-foreground">
+                {user?.name ?? "User"}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {user?.email}
+              </p>
             </div>
           </div>
 
@@ -127,7 +144,7 @@ export default function DashboardSidebar({
             Menu
           </p>
           <nav className="space-y-1">
-            {navItems.map((item) => {
+            {navItems.map(item => {
               const active = item.id === activeSection;
               return (
                 <button
@@ -140,17 +157,34 @@ export default function DashboardSidebar({
                     "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
                     active
                       ? "bg-primary/12 text-primary shadow-sm"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
                   <item.icon
-                    className={cn("h-4 w-4 shrink-0 transition-transform group-hover:scale-110", active && "text-primary")}
+                    className={cn(
+                      "h-4 w-4 shrink-0 transition-transform group-hover:scale-110",
+                      active && "text-primary"
+                    )}
                   />
                   <span>{item.label}</span>
-                  {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
+                  {active && (
+                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                  )}
                 </button>
               );
             })}
+            {user?.role === "admin" && (
+              <button
+                onClick={() => navigate("/admin")}
+                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-zinc-900 hover:text-white"
+              >
+                <ShieldCheck className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
+                <span>Admin Console</span>
+                <span className="ml-auto rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-bold uppercase text-zinc-700 group-hover:bg-white/15 group-hover:text-white">
+                  Admin
+                </span>
+              </button>
+            )}
           </nav>
 
           {/* Quick Stats */}
@@ -160,16 +194,24 @@ export default function DashboardSidebar({
           <div className="grid grid-cols-3 gap-2">
             {[
               { label: "Ready", value: stats.readyCount, icon: Film },
-              { label: "Rendering", value: stats.processingCount, icon: Sparkles },
+              {
+                label: "Rendering",
+                value: stats.processingCount,
+                icon: Sparkles,
+              },
               { label: "Total", value: stats.totalJobs, icon: BarChart3 },
-            ].map((s) => (
+            ].map(s => (
               <div
                 key={s.label}
                 className="flex flex-col items-center gap-1 rounded-xl border border-border/60 bg-card/60 px-2 py-3 text-center"
               >
                 <s.icon className="h-3.5 w-3.5 text-primary" />
-                <span className="text-lg font-semibold leading-none text-foreground">{s.value}</span>
-                <span className="text-[10px] text-muted-foreground">{s.label}</span>
+                <span className="text-lg font-semibold leading-none text-foreground">
+                  {s.value}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {s.label}
+                </span>
               </div>
             ))}
           </div>
@@ -180,7 +222,7 @@ export default function DashboardSidebar({
               "mt-6 overflow-hidden rounded-2xl border p-4",
               subscribed
                 ? "border-primary/25 bg-gradient-to-br from-primary/12 to-primary/5"
-                : "border-primary/20 bg-gradient-to-br from-accent/80 to-card/60",
+                : "border-primary/20 bg-gradient-to-br from-accent/80 to-card/60"
             )}
           >
             <div className="mb-1 flex items-center gap-2">
@@ -189,7 +231,9 @@ export default function DashboardSidebar({
               ) : (
                 <Zap className="h-4 w-4 text-primary" />
               )}
-              <p className="text-sm font-semibold text-foreground">{planLabel}</p>
+              <p className="text-sm font-semibold text-foreground">
+                {planLabel}
+              </p>
             </div>
             <p className="mb-3 text-xs text-muted-foreground">
               {subscribed
@@ -203,7 +247,7 @@ export default function DashboardSidebar({
                   className="btn-springy w-full rounded-full"
                   onClick={onBuyAdditionalVideo}
                 >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $15
+                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $17
                 </Button>
                 <Button
                   variant="outline"

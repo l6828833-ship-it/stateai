@@ -32,10 +32,13 @@ const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
 function getRedirectUri(req: Request): string {
   if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
   const proto =
-    (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim() ||
+    (req.headers["x-forwarded-proto"] as string | undefined)
+      ?.split(",")[0]
+      ?.trim() ||
     req.protocol ||
     "https";
-  const host = (req.headers["x-forwarded-host"] as string | undefined) || req.headers.host;
+  const host =
+    (req.headers["x-forwarded-host"] as string | undefined) || req.headers.host;
   return `${proto}://${host}/api/auth/google/callback`;
 }
 
@@ -73,7 +76,9 @@ export function registerGoogleAuthRoutes(app: Express) {
     try {
       const code = typeof req.query.code === "string" ? req.query.code : "";
       const state = typeof req.query.state === "string" ? req.query.state : "";
-      const expected = parseCookieHeader(req.headers.cookie ?? "")[STATE_COOKIE];
+      const expected = parseCookieHeader(req.headers.cookie ?? "")[
+        STATE_COOKIE
+      ];
 
       // CSRF guard: the state must match the one-time cookie we set.
       if (!code || !state || !expected || state !== expected) {
@@ -102,7 +107,10 @@ export function registerGoogleAuthRoutes(app: Express) {
         }),
       });
       if (!tokenRes.ok) {
-        console.error("[google] token exchange failed:", await tokenRes.text().catch(() => ""));
+        console.error(
+          "[google] token exchange failed:",
+          await tokenRes.text().catch(() => "")
+        );
         res.redirect("/login?error=google_token");
         return;
       }
@@ -117,7 +125,10 @@ export function registerGoogleAuthRoutes(app: Express) {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });
       if (!infoRes.ok) {
-        console.error("[google] userinfo failed:", await infoRes.text().catch(() => ""));
+        console.error(
+          "[google] userinfo failed:",
+          await infoRes.text().catch(() => "")
+        );
         res.redirect("/login?error=google_userinfo");
         return;
       }
@@ -142,13 +153,18 @@ export function registerGoogleAuthRoutes(app: Express) {
         lastSignedIn: new Date(),
       });
       const user = await db.getUserByOpenId(openId);
-      if (user && !user.emailVerified) {
+      if (!user || user.disabledAt) {
+        res.redirect("/login?error=account_disabled");
+        return;
+      }
+      if (!user.emailVerified) {
         await db.markEmailVerified(user.id);
       }
 
       // Mint the same session cookie the rest of the app expects.
       const token = await sdk.createSessionToken(openId, {
         name: info.name || info.email || "User",
+        sessionVersion: user.sessionVersion,
         expiresInMs: ONE_YEAR_MS,
       });
       res.cookie(COOKIE_NAME, token, {

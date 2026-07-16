@@ -2,24 +2,36 @@ import { describe, expect, it } from "vitest";
 import { PLANS, PLAN_BY_ID } from "../shared/plans";
 
 describe("billing plans", () => {
-  it("defines the yearly and monthly plans with correct pricing", () => {
-    expect(PLANS).toHaveLength(2);
-    expect(PLANS.map((plan) => plan.id)).toEqual(["annual", "pro"]);
-    expect(PLAN_BY_ID.annual.price).toBe(29);
-    expect(PLAN_BY_ID.annual.interval).toBe("year");
-    expect(PLAN_BY_ID.annual.videoAllowance).toBe("36 videos per year");
-    expect(PLAN_BY_ID.pro.price).toBe(39);
-    expect(PLAN_BY_ID.pro.interval).toBe("month");
-    expect(PLAN_BY_ID.pro.videoAllowance).toBe("3 videos per month");
+  it("defines three tiers for monthly and yearly billing", () => {
+    expect(PLANS).toHaveLength(6);
+    expect(PLANS.map(plan => plan.id)).toEqual([
+      "starter_monthly",
+      "creator_monthly",
+      "studio_monthly",
+      "starter_yearly",
+      "creator_yearly",
+      "studio_yearly",
+    ]);
+    expect(PLAN_BY_ID.starter_monthly.price).toBe(17);
+    expect(PLAN_BY_ID.starter_monthly.interval).toBe("month");
+    expect(PLAN_BY_ID.starter_monthly.videoAllowance).toBe(
+      "3 videos per month"
+    );
+    expect(PLAN_BY_ID.starter_yearly.price).toBe(156);
+    expect(PLAN_BY_ID.starter_yearly.interval).toBe("year");
+    expect(PLAN_BY_ID.starter_yearly.videoAllowance).toBe("36 videos per year");
   });
 
-  it("places and highlights the yearly plan first", () => {
-    expect(PLANS[0].id).toBe("annual");
-    expect(PLAN_BY_ID.annual.highlighted).toBe(true);
+  it("highlights the Creator tier in both billing intervals", () => {
+    expect(PLAN_BY_ID.creator_monthly.highlighted).toBe(true);
+    expect(PLAN_BY_ID.creator_yearly.highlighted).toBe(true);
   });
 
   it("has a Stripe secret key configured in the environment", () => {
-    expect(process.env.STRIPE_SECRET_KEY, "STRIPE_SECRET_KEY must be set").toBeTruthy();
+    expect(
+      process.env.STRIPE_SECRET_KEY,
+      "STRIPE_SECRET_KEY must be set"
+    ).toBeTruthy();
     expect(process.env.STRIPE_SECRET_KEY!.startsWith("sk_")).toBe(true);
   });
 });

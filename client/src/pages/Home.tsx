@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
-import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
+import PricingCards from "@/components/PricingCards";
+import TourTool, {
+  type ToolImage,
+  type ToolSettings,
+} from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
-import { PLANS } from "@shared/plans";
+import type { PlanId } from "@shared/plans";
 import {
   ArrowRight,
   Brain,
@@ -37,17 +41,17 @@ function useReveal() {
   useEffect(() => {
     const els = document.querySelectorAll(".reveal-on-scroll");
     const io = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
+      entries => {
+        entries.forEach(e => {
           if (e.isIntersecting) {
             e.target.classList.add("is-visible");
             io.unobserve(e.target);
           }
         });
       },
-      { threshold: 0.15 },
+      { threshold: 0.15 }
     );
-    els.forEach((el) => io.observe(el));
+    els.forEach(el => io.observe(el));
     return () => io.disconnect();
   }, []);
 }
@@ -62,7 +66,10 @@ const HERO_ROOMS = [
 function HeroPreview() {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setFrame((f) => (f + 1) % HERO_ROOMS.length), 4500);
+    const t = setInterval(
+      () => setFrame(f => (f + 1) % HERO_ROOMS.length),
+      4500
+    );
     return () => clearInterval(t);
   }, []);
   const current = HERO_ROOMS[frame];
@@ -97,7 +104,7 @@ function HeroPreview() {
               alt={`AI house tour preview — ${room.label}`}
               className={cn(
                 "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
-                i === frame ? "opacity-100 animate-ken-burns" : "opacity-0",
+                i === frame ? "opacity-100 animate-ken-burns" : "opacity-0"
               )}
             />
           ))}
@@ -118,7 +125,9 @@ function HeroPreview() {
             <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-white">
               <span className="flex items-center gap-1.5">
                 <Clapperboard className="h-3.5 w-3.5" />
-                {current.label} <ArrowRight className="h-3 w-3 opacity-70" /> {next.label}
+                {
+                  current.label
+                } <ArrowRight className="h-3 w-3 opacity-70" /> {next.label}
               </span>
               <span className="flex gap-1">
                 {HERO_ROOMS.map((_, i) => (
@@ -126,7 +135,7 @@ function HeroPreview() {
                     key={i}
                     className={cn(
                       "h-1.5 rounded-full transition-all duration-500",
-                      i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50",
+                      i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50"
                     )}
                   />
                 ))}
@@ -187,7 +196,7 @@ export default function Home() {
     }
   }, [isAuthenticated, draft.pendingGenerate, navigate]);
 
-  const toolImages: ToolImage[] = draft.images.map((img) => ({
+  const toolImages: ToolImage[] = draft.images.map(img => ({
     id: img.cid,
     previewUrl: img.dataUrl,
     fileName: img.fileName,
@@ -210,33 +219,43 @@ export default function Home() {
           dataUrl: prepared.dataUrl,
         });
         if (prepared.optimized) {
-          toast.info(`${file.name} was optimized for a reliable high-quality upload`);
+          toast.info(
+            `${file.name} was optimized for a reliable high-quality upload`
+          );
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "The image could not be read";
+        const message =
+          error instanceof Error
+            ? error.message
+            : "The image could not be read";
         toast.error(`${file.name}: ${message}`);
       }
     }
     if (newImages.length > 0) {
-      setDraft((current) => ({ ...current, images: [...current.images, ...newImages] }));
-      toast.success(`${newImages.length} photo${newImages.length > 1 ? "s" : ""} added to your tour`);
+      setDraft(current => ({
+        ...current,
+        images: [...current.images, ...newImages],
+      }));
+      toast.success(
+        `${newImages.length} photo${newImages.length > 1 ? "s" : ""} added to your tour`
+      );
     }
   };
 
   const handleReorder = (orderedIds: Array<string | number>) => {
-    setDraft((current) => {
-      const byId = new Map(current.images.map((image) => [image.cid, image]));
+    setDraft(current => {
+      const byId = new Map(current.images.map(image => [image.cid, image]));
       const reordered = orderedIds
-        .map((id) => byId.get(String(id)))
+        .map(id => byId.get(String(id)))
         .filter((image): image is DraftImage => Boolean(image));
       return { ...current, images: reordered };
     });
   };
 
   const handleDelete = (id: string | number) => {
-    setDraft((current) => ({
+    setDraft(current => ({
       ...current,
-      images: current.images.filter((image) => image.cid !== String(id)),
+      images: current.images.filter(image => image.cid !== String(id)),
     }));
   };
 
@@ -255,20 +274,27 @@ export default function Home() {
     try {
       await saveDraft(pendingDraft);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Browser storage is unavailable";
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Browser storage is unavailable";
       toast.error(`Your photos could not be saved before sign-up: ${message}`);
       return;
     }
     if (isAuthenticated) {
       navigate("/dashboard");
     } else {
-      toast("Create a free account to generate — your photos & settings are saved.");
+      toast(
+        "Create a free account to generate — your photos & settings are saved."
+      );
       setTimeout(() => navigate("/signup"), 600);
     }
   };
 
   const scrollToTool = () => {
-    document.getElementById("tour-tool")?.scrollIntoView({ behavior: "smooth" });
+    document
+      .getElementById("tour-tool")
+      ?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
@@ -279,13 +305,13 @@ export default function Home() {
           "fixed inset-x-0 top-0 z-50 transition-all duration-300",
           scrolled
             ? "border-b border-primary/10 bg-background/80 shadow-[0_8px_30px_rgba(232,148,181,0.12)] backdrop-blur-xl"
-            : "border-b border-transparent bg-transparent",
+            : "border-b border-transparent bg-transparent"
         )}
       >
         <div
           className={cn(
             "container flex items-center justify-between transition-all duration-300",
-            scrolled ? "h-14" : "h-16",
+            scrolled ? "h-14" : "h-16"
           )}
         >
           {/* Logo */}
@@ -293,7 +319,7 @@ export default function Home() {
             onClick={() => scrollToSection("top")}
             className="flex items-center gap-2 font-display text-lg text-foreground"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
               <Clapperboard className="h-4 w-4" />
             </span>
             EstateTour AI
@@ -306,7 +332,7 @@ export default function Home() {
               { label: "AI Real Estate", id: "features" },
               { label: "How it works", id: "how-it-works" },
               { label: "Pricing", id: "pricing" },
-            ].map((item) => (
+            ].map(item => (
               <button
                 key={item.id}
                 onClick={() => scrollToSection(item.id)}
@@ -322,7 +348,7 @@ export default function Home() {
             {isAuthenticated ? (
               <Button
                 variant="default"
-                className="btn-springy rounded-full"
+                className="btn-springy rounded-full bg-zinc-950 text-white hover:bg-zinc-800"
                 onClick={() => navigate("/dashboard")}
               >
                 Dashboard <ArrowRight className="ml-1 h-4 w-4" />
@@ -336,19 +362,26 @@ export default function Home() {
                 >
                   Log in
                 </Button>
-                <Button className="btn-springy rounded-full" onClick={scrollToTool}>
+                <Button
+                  className="btn-springy rounded-full bg-zinc-950 text-white hover:bg-zinc-800"
+                  onClick={scrollToTool}
+                >
                   Try it free
                 </Button>
               </>
             )}
             {/* Mobile menu toggle */}
             <button
-              onClick={() => setMobileMenuOpen((o) => !o)}
+              onClick={() => setMobileMenuOpen(o => !o)}
               className="flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/70 md:hidden"
               aria-label="Toggle menu"
               aria-expanded={mobileMenuOpen}
             >
-              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              {mobileMenuOpen ? (
+                <X className="h-5 w-5" />
+              ) : (
+                <Menu className="h-5 w-5" />
+              )}
             </button>
           </div>
         </div>
@@ -361,7 +394,7 @@ export default function Home() {
               { label: "AI Real Estate", id: "features" },
               { label: "How it works", id: "how-it-works" },
               { label: "Pricing", id: "pricing" },
-            ].map((item) => (
+            ].map(item => (
               <button
                 key={item.id}
                 onClick={() => scrollToSection(item.id)}
@@ -396,21 +429,24 @@ export default function Home() {
           <div
             className="animate-blob-1 absolute -left-32 -top-24 h-[34rem] w-[34rem] rounded-full opacity-60 blur-3xl"
             style={{
-              background: "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
+              background:
+                "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
               translate: `${parallax.x * -18}px ${parallax.y * -18}px`,
             }}
           />
           <div
             className="animate-blob-2 absolute right-[-10rem] top-[15%] h-[30rem] w-[30rem] rounded-full opacity-50 blur-3xl"
             style={{
-              background: "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
+              background:
+                "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
               translate: `${parallax.x * -26}px ${parallax.y * -26}px`,
             }}
           />
           <div
             className="animate-blob-3 absolute bottom-[-8rem] left-[30%] h-[26rem] w-[26rem] rounded-full opacity-40 blur-3xl"
             style={{
-              background: "radial-gradient(circle, #F5C5DE 0%, #D9C4F2 60%, transparent 78%)",
+              background:
+                "radial-gradient(circle, #F5C5DE 0%, #D9C4F2 60%, transparent 78%)",
               translate: `${parallax.x * -12}px ${parallax.y * -12}px`,
             }}
           />
@@ -427,28 +463,32 @@ export default function Home() {
             </span>
             <h1 className="animate-fade-up-delay-1 mt-5 font-display text-4xl leading-[1.08] text-foreground sm:text-5xl lg:text-[3.6rem]">
               Photos in.
-              <br />
-              A{" "}
+              <br />A{" "}
               <span className="animate-text-sheen bg-gradient-to-r from-[#E894B5] via-[#c98ad6] to-[#E894B5] bg-clip-text text-transparent">
                 cinematic tour
               </span>{" "}
               out.
             </h1>
             <p className="animate-fade-up-delay-2 mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Upload the listing photos you already have. Our AI walks buyers through every
-              room and lifts them over the rooftop — a broadcast-quality tour video in minutes,
-              not days. No drone pilot, no film crew, no editing suite.
+              Upload the listing photos you already have. Our AI walks buyers
+              through every room and lifts them over the rooftop — a
+              broadcast-quality tour video in minutes, not days. No drone pilot,
+              no film crew, no editing suite.
             </p>
             <div className="animate-fade-up-delay-3 mt-8 flex flex-wrap items-center gap-4">
               <Button
                 size="lg"
                 onClick={scrollToTool}
-                className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
+                className="btn-springy rounded-full bg-zinc-950 px-8 py-6 text-base text-white shadow-xl shadow-zinc-950/20 hover:bg-zinc-800"
               >
                 Create my tour video <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
               <button
-                onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+                onClick={() =>
+                  document
+                    .getElementById("how-it-works")
+                    ?.scrollIntoView({ behavior: "smooth" })
+                }
                 className="btn-springy group inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-medium text-foreground/80 transition-colors hover:text-primary"
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent group-hover:bg-primary/15">
@@ -474,9 +514,12 @@ export default function Home() {
                 </div>
                 <div className="flex flex-col leading-tight">
                   <span className="flex items-center gap-1 text-sm font-medium text-foreground">
-                    <Star className="h-3.5 w-3.5 fill-primary text-primary" /> 4.9/5
+                    <Star className="h-3.5 w-3.5 fill-primary text-primary" />{" "}
+                    4.9/5
                   </span>
-                  <span className="text-xs text-muted-foreground">from 600+ agents</span>
+                  <span className="text-xs text-muted-foreground">
+                    from 600+ agents
+                  </span>
                 </div>
               </div>
               <div className="hidden h-8 w-px bg-border sm:block" />
@@ -496,6 +539,58 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ===== Interactive tool, intentionally directly below the hero ===== */}
+      <section
+        id="tour-tool"
+        className="relative scroll-mt-20 border-y border-zinc-200/70 bg-white/55 py-20"
+      >
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="absolute left-1/2 top-0 h-72 w-[44rem] -translate-x-1/2 rounded-full bg-primary/15 blur-3xl" />
+        </div>
+        <div className="container relative">
+          <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+            <span className="rounded-full bg-zinc-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
+              Build your first tour
+            </span>
+            <h2 className="mt-4 font-display text-3xl text-foreground sm:text-4xl">
+              Your AI video studio, ready now
+            </h2>
+            <p className="mt-3 max-w-2xl text-muted-foreground">
+              Add up to six photos, arrange the story, and choose any social
+              ratio. Your exact draft follows you through sign-up.
+            </p>
+          </div>
+          <div className="reveal-on-scroll mx-auto mt-10 max-w-4xl">
+            <div className="rounded-[2rem] border border-zinc-200 bg-white/90 p-3 shadow-[0_30px_100px_-45px_rgba(24,24,27,.45)] sm:p-5">
+              <div className="rounded-[1.5rem] border border-primary/15 bg-[#fffafb] p-5 sm:p-8">
+                <TourTool
+                  images={toolImages}
+                  settings={settings}
+                  onFilesAdded={handleFilesAdded}
+                  onReorder={handleReorder}
+                  onDelete={handleDelete}
+                  onSettingsChange={handleSettingsChange}
+                  onGenerate={handleGenerate}
+                  generateLabel="Generate Tour Video"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-zinc-500">
+              {[
+                "No card required",
+                "1080p high quality",
+                "Up to 15 seconds",
+                "Draft saved securely",
+              ].map(item => (
+                <span key={item} className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-zinc-900" /> {item}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ===== Features ===== */}
       <section id="features" className="relative scroll-mt-24 py-24">
         <div className="container">
@@ -504,8 +599,8 @@ export default function Home() {
               Every listing deserves a premiere
             </h2>
             <p className="mt-4 text-muted-foreground">
-              Three tour styles, one intelligent pipeline. Your photos stay exactly as they are —
-              the camera is the only thing that moves.
+              Three tour styles, one intelligent pipeline. Your photos stay
+              exactly as they are — the camera is the only thing that moves.
             </p>
           </div>
           <div className="mt-14 grid gap-6 md:grid-cols-3">
@@ -534,8 +629,12 @@ export default function Home() {
                 <span className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent">
                   <f.icon className="h-5 w-5 text-primary" strokeWidth={1.6} />
                 </span>
-                <h3 className="font-display text-lg text-foreground">{f.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{f.body}</p>
+                <h3 className="font-display text-lg text-foreground">
+                  {f.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  {f.body}
+                </p>
               </div>
             ))}
           </div>
@@ -552,11 +651,27 @@ export default function Home() {
           </div>
           <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             {[
-              { icon: Upload, label: "Upload", body: "Add your listing photos" },
-              { icon: ListOrdered, label: "Confirm order", body: "Drag rooms into tour sequence" },
-              { icon: Wand2, label: "Generate", body: "AI films your walkthrough" },
+              {
+                icon: Upload,
+                label: "Upload",
+                body: "Add your listing photos",
+              },
+              {
+                icon: ListOrdered,
+                label: "Confirm order",
+                body: "Drag rooms into tour sequence",
+              },
+              {
+                icon: Wand2,
+                label: "Generate",
+                body: "AI films your walkthrough",
+              },
               { icon: Eye, label: "Review", body: "Watch your cinematic tour" },
-              { icon: Download, label: "Export", body: "Download & share anywhere" },
+              {
+                icon: Download,
+                label: "Export",
+                body: "Download & share anywhere",
+              },
             ].map((s, i) => (
               <div
                 key={s.label}
@@ -588,7 +703,8 @@ export default function Home() {
               Perfect for every property type
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Whether it's a cozy apartment, sprawling estate, or commercial space, EstateTour AI adapts to your listing.
+              Whether it's a cozy apartment, sprawling estate, or commercial
+              space, EstateTour AI adapts to your listing.
             </p>
           </div>
           <div className="mt-14 grid gap-6 md:grid-cols-3">
@@ -617,8 +733,12 @@ export default function Home() {
                 <span className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent">
                   <c.icon className="h-5 w-5 text-primary" strokeWidth={1.6} />
                 </span>
-                <h3 className="font-display text-lg text-foreground">{c.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{c.body}</p>
+                <h3 className="font-display text-lg text-foreground">
+                  {c.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  {c.body}
+                </p>
               </div>
             ))}
           </div>
@@ -636,17 +756,20 @@ export default function Home() {
           <div className="mt-14 grid gap-6 md:grid-cols-3">
             {[
               {
-                quote: "We went from 3 days to 3 hours per listing. Our showings are up 40% since we started using EstateTour AI.",
+                quote:
+                  "We went from 3 days to 3 hours per listing. Our showings are up 40% since we started using EstateTour AI.",
                 author: "Sarah Chen",
                 role: "Real Estate Agent, San Francisco",
               },
               {
-                quote: "The quality is indistinguishable from a professional videographer. At a fraction of the cost and zero scheduling headaches.",
+                quote:
+                  "The quality is indistinguishable from a professional videographer. At a fraction of the cost and zero scheduling headaches.",
                 author: "Marcus Rodriguez",
                 role: "Luxury Property Manager, Miami",
               },
               {
-                quote: "Our buyers love the immersive experience. We've noticed longer engagement times and more qualified leads from listings with EstateTour videos.",
+                quote:
+                  "Our buyers love the immersive experience. We've noticed longer engagement times and more qualified leads from listings with EstateTour videos.",
                 author: "Jennifer Park",
                 role: "Brokerage Director, Seattle",
               },
@@ -658,12 +781,19 @@ export default function Home() {
               >
                 <div className="mb-4 flex gap-0.5">
                   {[...Array(5)].map((_, j) => (
-                    <Star key={j} className="h-4 w-4 fill-primary text-primary" />
+                    <Star
+                      key={j}
+                      className="h-4 w-4 fill-primary text-primary"
+                    />
                   ))}
                 </div>
-                <p className="text-sm leading-relaxed text-muted-foreground italic">"{t.quote}"</p>
+                <p className="text-sm leading-relaxed text-muted-foreground italic">
+                  "{t.quote}"
+                </p>
                 <div className="mt-5 border-t border-border/50 pt-4">
-                  <p className="font-medium text-sm text-foreground">{t.author}</p>
+                  <p className="font-medium text-sm text-foreground">
+                    {t.author}
+                  </p>
                   <p className="text-xs text-muted-foreground">{t.role}</p>
                 </div>
               </div>
@@ -672,129 +802,91 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ===== Pricing Preview ===== */}
-      <section id="pricing" className="relative scroll-mt-24 py-24">
-        <div className="container">
-          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
-            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
-              Simple, transparent pricing
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              Choose yearly or monthly billing with clear video allowances and no watermark.
-            </p>
-          </div>
-          <div className="mx-auto mt-14 grid max-w-4xl gap-6 md:grid-cols-2">
-            {PLANS.map((plan, i) => (
-              <div
-                key={plan.id}
-                className={cn(
-                  "reveal-on-scroll relative rounded-2xl p-7 transition-all",
-                  plan.highlighted
-                    ? "glass-panel border-primary/50 bg-primary/5 ring-2 ring-primary/20"
-                    : "glass-panel soft-card-hover",
-                )}
-                style={{ transitionDelay: `${i * 120}ms` }}
-              >
-                {plan.badge && (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
-                    {plan.badge}
-                  </span>
-                )}
-                <h3 className="font-display text-lg text-foreground">{plan.name}</h3>
-                <p className="mt-1 text-xs text-muted-foreground">{plan.tagline}</p>
-                <div className="mt-3 flex items-baseline gap-1">
-                  <span className="text-3xl font-bold text-foreground">${plan.price}</span>
-                  <span className="text-sm text-muted-foreground">
-                    /{plan.interval === "year" ? "year" : "month"}
-                  </span>
-                </div>
-                <ul className="mt-6 space-y-3">
-                  {plan.features.map((feature) => (
-                    <li
-                      key={feature}
-                      className="flex items-start gap-2 text-sm text-muted-foreground"
-                    >
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ===== The Tool ===== */}
-      <section id="tour-tool" className="relative py-24">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div
-            className="animate-blob-2 absolute left-[-8rem] top-[20%] h-[24rem] w-[24rem] rounded-full opacity-40 blur-3xl"
-            style={{ background: "radial-gradient(circle, #F7B8D0 0%, transparent 70%)" }}
-          />
-        </div>
+      {/* ===== Pricing ===== */}
+      <section
+        id="pricing"
+        className="relative scroll-mt-24 overflow-hidden py-24"
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(247,184,208,.2),transparent_46%)]" />
         <div className="container relative">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
-            <h2 className="font-display text-3xl text-foreground sm:text-4xl">
-              Start your tour right here
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+              Pricing that scales
+            </span>
+            <h2 className="mt-3 font-display text-3xl text-foreground sm:text-4xl">
+              One studio. Three ways to grow.
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Upload photos, set the order, pick a style. When you hit generate, we'll save
-              everything to your free account.
+              Switch between monthly and yearly billing. Every tier includes
+              1080p video, all aspect ratios, viral effects, and no watermark.
             </p>
           </div>
-          <div className="reveal-on-scroll mx-auto mt-10 max-w-3xl">
-            <div className="glass-panel rounded-3xl p-6 sm:p-8">
-              <TourTool
-                images={toolImages}
-                settings={settings}
-                onFilesAdded={handleFilesAdded}
-                onReorder={handleReorder}
-                onDelete={handleDelete}
-                onSettingsChange={handleSettingsChange}
-                onGenerate={handleGenerate}
-                generateLabel="Generate Tour Video"
-              />
-            </div>
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-              Your photos and settings are preserved when you sign up
-            </p>
-          </div>
+          <PricingCards
+            className="reveal-on-scroll mx-auto mt-12 max-w-6xl"
+            onSelectPlan={async (planId: PlanId) => {
+              if (!isAuthenticated) {
+                try {
+                  localStorage.setItem("estatetour_selected_plan", planId);
+                } catch {}
+                navigate("/signup");
+                return;
+              }
+              try {
+                const response = await fetch(
+                  `/api/billing/checkout?plan=${planId}`,
+                  { method: "POST" }
+                );
+                const data = (await response.json()) as {
+                  url?: string;
+                  error?: string;
+                };
+                if (data.url) window.location.href = data.url;
+                else toast.error(data.error || "Could not start checkout");
+              } catch {
+                toast.error(
+                  "Could not start checkout. Check your connection and try again."
+                );
+              }
+            }}
+          />
         </div>
       </section>
 
       {/* ===== CTA Banner ===== */}
-      <section className="relative py-24 text-center">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div
-            className="animate-blob-1 absolute right-[-6rem] top-[10%] h-[22rem] w-[22rem] rounded-full opacity-30 blur-3xl"
-            style={{ background: "radial-gradient(circle, #E894B5 0%, transparent 70%)" }}
-          />
-        </div>
-        <div className="container relative">
-          <h2 className="reveal-on-scroll font-display text-3xl text-foreground sm:text-4xl">
-            Ready to transform your listings?
-          </h2>
-          <p className="reveal-on-scroll mt-4 mx-auto max-w-xl text-muted-foreground">
-            Join hundreds of agents and brokers creating stunning property tours in minutes.
-          </p>
-          <div className="reveal-on-scroll mt-8 flex flex-wrap items-center justify-center gap-4">
-            <Button
-              size="lg"
-              onClick={scrollToTool}
-              className="btn-springy animate-glow-pulse rounded-full px-8 py-6 text-base"
-            >
-              Create your first tour <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="btn-springy rounded-full px-8 py-6"
-              onClick={() => scrollToSection("pricing")}
-            >
-              View pricing
-            </Button>
+      <section className="relative py-24">
+        <div className="container">
+          <div className="reveal-on-scroll relative overflow-hidden rounded-[2.25rem] bg-zinc-950 px-6 py-14 text-center text-white shadow-[0_35px_100px_-45px_rgba(24,24,27,.8)] sm:px-12 sm:py-20">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(247,184,208,.28),transparent_32%),radial-gradient(circle_at_85%_90%,rgba(201,138,214,.2),transparent_34%)]" />
+            <div className="relative mx-auto max-w-2xl">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-medium text-white/70">
+                <Sparkles className="h-3.5 w-3.5" /> Your next listing can
+                launch today
+              </span>
+              <h2 className="mt-5 font-display text-3xl text-white sm:text-5xl">
+                Make every listing feel like a premiere.
+              </h2>
+              <p className="mx-auto mt-4 max-w-xl text-sm leading-6 text-white/55 sm:text-base">
+                Turn six photos into a polished, social-ready property
+                story—with no crew, editing timeline, or watermark.
+              </p>
+              <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  size="lg"
+                  onClick={scrollToTool}
+                  className="btn-springy rounded-full bg-white px-8 py-6 text-base text-zinc-950 hover:bg-zinc-200"
+                >
+                  Create your first tour <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="btn-springy rounded-full border-white/15 bg-white/10 px-8 py-6 text-white hover:bg-white/15 hover:text-white"
+                  onClick={() => scrollToSection("pricing")}
+                >
+                  Compare plans
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -803,22 +895,34 @@ export default function Home() {
       <footer className="mt-8 border-t border-border/70 py-10">
         <div className="container flex flex-col items-center justify-between gap-4 sm:flex-row">
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Clapperboard className="h-4 w-4 text-primary" /> EstateTour AI · Cinematic property tours
+            <Clapperboard className="h-4 w-4 text-primary" /> EstateTour AI ·
+            Cinematic property tours
           </span>
           <nav className="flex flex-wrap gap-6 text-sm text-muted-foreground">
-            <button onClick={scrollToTool} className="transition-colors hover:text-primary">
+            <button
+              onClick={scrollToTool}
+              className="transition-colors hover:text-primary"
+            >
               Create a tour
             </button>
             <button
-              onClick={() => (isAuthenticated ? navigate("/dashboard") : navigate("/login"))}
+              onClick={() =>
+                isAuthenticated ? navigate("/dashboard") : navigate("/login")
+              }
               className="transition-colors hover:text-primary"
             >
               {isAuthenticated ? "Dashboard" : "Sign in"}
             </button>
-            <button onClick={() => scrollToSection("pricing")} className="transition-colors hover:text-primary">
+            <button
+              onClick={() => scrollToSection("pricing")}
+              className="transition-colors hover:text-primary"
+            >
               Pricing
             </button>
-            <button onClick={() => scrollToSection("how-it-works")} className="transition-colors hover:text-primary">
+            <button
+              onClick={() => scrollToSection("how-it-works")}
+              className="transition-colors hover:text-primary"
+            >
               How it works
             </button>
           </nav>

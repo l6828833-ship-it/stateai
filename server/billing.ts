@@ -1,6 +1,12 @@
 import Stripe from "stripe";
 import type { Request, Response } from "express";
-import { PLAN_BY_ID, PLANS, type PlanId } from "@shared/plans";
+import {
+  ADDITIONAL_VIDEO_PRICE_USD,
+  PLAN_BY_ID,
+  PLANS,
+  isPlanId,
+  type PlanId,
+} from "@shared/plans";
 import * as db from "./db";
 
 let _stripe: Stripe | null = null;
@@ -20,25 +26,29 @@ export function getStripe(): Stripe {
 const priceCache = new Map<PlanId, string>();
 let additionalVideoPriceId: string | null = null;
 
-const ADDITIONAL_VIDEO_PRICE_USD = 15;
 const ADDITIONAL_VIDEO_PRICE_CENTS = ADDITIONAL_VIDEO_PRICE_USD * 100;
 
 type LegacyPlanId = "starter" | "annual" | "pro" | "business";
-type StoredPlanId = PlanId | "starter" | "business";
+type StoredPlanId = PlanId | LegacyPlanId;
 
-const CURRENT_PRICE_BY_LOOKUP_KEY: Record<string, PlanId> = {
-  estatetour_annual_v2: "annual",
-  estatetour_pro_v2: "pro",
-};
+const CURRENT_PRICE_BY_LOOKUP_KEY: Record<string, PlanId> = Object.fromEntries(
+  PLANS.map(plan => [`estatetour_${plan.id}_v3`, plan.id])
+) as Record<string, PlanId>;
 
 const LEGACY_PRICE_BY_LOOKUP_KEY: Record<
   string,
   { planId: LegacyPlanId; amount: number; interval: "month" | "year" }
 > = {
+  estatetour_annual_v2: { planId: "annual", amount: 2900, interval: "year" },
+  estatetour_pro_v2: { planId: "pro", amount: 3900, interval: "month" },
   estatetour_starter_v1: { planId: "starter", amount: 900, interval: "month" },
   estatetour_annual_v1: { planId: "annual", amount: 2900, interval: "year" },
   estatetour_pro_v1: { planId: "pro", amount: 3900, interval: "month" },
-  estatetour_business_v1: { planId: "business", amount: 9900, interval: "month" },
+  estatetour_business_v1: {
+    planId: "business",
+    amount: 9900,
+    interval: "month",
+  },
 };
 
 function isExactPlanPrice(price: Stripe.Price, planId: PlanId): boolean {
@@ -52,7 +62,9 @@ function isExactPlanPrice(price: Stripe.Price, planId: PlanId): boolean {
 }
 
 /** Classify only exact prices created by known versions of this application. */
-function classifyGenerationPrice(price: Stripe.Price):
+function classifyGenerationPrice(
+  price: Stripe.Price
+):
   | { planId: PlanId; enforceAllowance: true }
   | { planId: LegacyPlanId; enforceAllowance: false }
   | null {
@@ -72,9 +84,7 @@ function classifyGenerationPrice(price: Stripe.Price):
     price.currency === "usd" &&
     price.unit_amount === legacy.amount &&
     price.recurring?.interval === legacy.interval;
-  return exact
-    ? { planId: legacy.planId, enforceAllowance: false }
-    : null;
+  return exact ? { planId: legacy.planId, enforceAllowance: false } : null;
 }
 
 function isExactAdditionalVideoPrice(price: Stripe.Price): boolean {
@@ -92,9 +102,12 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
 
   const stripe = getStripe();
   const plan = PLAN_BY_ID[planId];
-  const lookupKey = `estatetour_${planId}_v2`;
+  const lookupKey = `estatetour_${planId}_v3`;
 
-  const existing = await stripe.prices.list({ lookup_keys: [lookupKey], limit: 1 });
+  const existing = await stripe.prices.list({
+    lookup_keys: [lookupKey],
+    limit: 1,
+  });
   if (existing.data.length > 0) {
     if (!isExactPlanPrice(existing.data[0], planId)) {
       throw new Error(`The configured Stripe price for ${planId} is incorrect`);
@@ -128,11 +141,16 @@ async function ensureAdditionalVideoPrice(): Promise<string> {
   if (additionalVideoPriceId) return additionalVideoPriceId;
 
   const stripe = getStripe();
-  const lookupKey = "estatetour_additional_video_v2";
-  const existing = await stripe.prices.list({ lookup_keys: [lookupKey], limit: 1 });
+  const lookupKey = "estatetour_additional_video_v3";
+  const existing = await stripe.prices.list({
+    lookup_keys: [lookupKey],
+    limit: 1,
+  });
   if (existing.data.length > 0) {
     if (!isExactAdditionalVideoPrice(existing.data[0])) {
-      throw new Error("The configured additional-video Stripe price is not exactly USD $15");
+      throw new Error(
+        `The configured additional-video Stripe price is not exactly USD $${ADDITIONAL_VIDEO_PRICE_USD}`
+      );
     }
     additionalVideoPriceId = existing.data[0].id;
     return additionalVideoPriceId;
@@ -140,7 +158,7 @@ async function ensureAdditionalVideoPrice(): Promise<string> {
 
   const product = await stripe.products.create({
     name: "EstateTour AI — Additional video",
-    description: "One additional high-quality 1080p cinematic video",
+    description: `One additional high-quality 1080p cinematic video for $${ADDITIONAL_VIDEO_PRICE_USD}`,
     metadata: { purchase_type: "additional_video" },
   });
   const price = await stripe.prices.create({
@@ -152,33 +170,36 @@ async function ensureAdditionalVideoPrice(): Promise<string> {
   });
   const createdPrice = await stripe.prices.retrieve(price.id);
   if (!isExactAdditionalVideoPrice(createdPrice)) {
-    throw new Error("Stripe did not create the exact USD $15 additional-video price");
+    throw new Error(
+      `Stripe did not create the exact USD $${ADDITIONAL_VIDEO_PRICE_USD} additional-video price`
+    );
   }
   additionalVideoPriceId = price.id;
   return price.id;
 }
 
-function isPlanId(v: string): v is PlanId {
-  return PLANS.some((p) => p.id === v);
+function isCurrentPlanId(value: string): value is PlanId {
+  return isPlanId(value);
 }
 
 function getOrigin(req: Request): string {
   const origin = req.headers.origin;
   if (typeof origin === "string" && origin) return origin;
-  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+  const proto =
+    (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
   const host = req.headers.host ?? "localhost";
   return `${proto}://${host}`;
 }
 
-/** POST /api/billing/checkout?plan=annual|pro — requires authentication. */
+/** POST /api/billing/checkout?plan=<tier>_<interval> — requires authentication. */
 export async function handleCheckout(
   req: Request,
   res: Response,
-  user: { id: number; email: string | null; name: string | null },
+  user: { id: number; email: string | null; name: string | null }
 ) {
   try {
     const planParam = String(req.query.plan ?? "");
-    if (!isPlanId(planParam)) {
+    if (!isCurrentPlanId(planParam)) {
       res.status(400).json({ error: "Unknown plan" });
       return;
     }
@@ -187,6 +208,14 @@ export async function handleCheckout(
     const origin = getOrigin(req);
 
     const existingSub = await db.getSubscription(user.id);
+    if (
+      existingSub?.stripeSubscriptionId &&
+      (existingSub.status === "active" || existingSub.status === "trialing")
+    ) {
+      await changeSubscriptionPlan(user.id, planParam);
+      res.json({ url: `${origin}/dashboard?plan=changed` });
+      return;
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -194,7 +223,9 @@ export async function handleCheckout(
       allow_promotion_codes: true,
       client_reference_id: user.id.toString(),
       customer: existingSub?.stripeCustomerId || undefined,
-      customer_email: existingSub?.stripeCustomerId ? undefined : (user.email ?? undefined),
+      customer_email: existingSub?.stripeCustomerId
+        ? undefined
+        : (user.email ?? undefined),
       metadata: {
         user_id: user.id.toString(),
         customer_email: user.email ?? "",
@@ -214,16 +245,20 @@ export async function handleCheckout(
   }
 }
 
-/** Create a one-time $15 checkout for one additional generation. */
+/** Create a one-time additional-video checkout. */
 export async function handleAdditionalVideoCheckout(
   req: Request,
   res: Response,
-  user: { id: number; email: string | null },
+  user: { id: number; email: string | null }
 ) {
   try {
     const subscription = await db.getSubscription(user.id);
     const entitlement = await getStripeGenerationEntitlement(user.id);
-    if (!(await db.hasActiveSubscription(user.id)) || !subscription || !entitlement) {
+    if (
+      !(await db.hasActiveSubscription(user.id)) ||
+      !subscription ||
+      !entitlement
+    ) {
       res.status(403).json({ error: "A recognized active plan is required" });
       return;
     }
@@ -236,7 +271,9 @@ export async function handleAdditionalVideoCheckout(
       line_items: [{ price: priceId, quantity: 1 }],
       client_reference_id: user.id.toString(),
       customer: subscription.stripeCustomerId || undefined,
-      customer_email: subscription.stripeCustomerId ? undefined : (user.email ?? undefined),
+      customer_email: subscription.stripeCustomerId
+        ? undefined
+        : (user.email ?? undefined),
       metadata: {
         user_id: user.id.toString(),
         purchase_type: "additional_video",
@@ -253,13 +290,16 @@ export async function handleAdditionalVideoCheckout(
     res.json({ url: session.url });
   } catch (error) {
     console.error("[Billing] Additional-video checkout error:", error);
-    res.status(500).json({ error: "Could not start additional-video checkout" });
+    res
+      .status(500)
+      .json({ error: "Could not start additional-video checkout" });
   }
 }
 
 /** Return Stripe's exact period and a fail-closed classification of its price. */
 export async function getStripeGenerationEntitlement(userId: number): Promise<{
   periodStart: Date;
+  periodEnd: Date;
   enforceAllowance: boolean;
   planId?: PlanId;
 } | null> {
@@ -267,7 +307,7 @@ export async function getStripeGenerationEntitlement(userId: number): Promise<{
   if (!stored?.stripeSubscriptionId) return null;
 
   const subscription = await getStripe().subscriptions.retrieve(
-    stored.stripeSubscriptionId,
+    stored.stripeSubscriptionId
   );
   if (subscription.status !== "active" && subscription.status !== "trialing") {
     return null;
@@ -275,21 +315,28 @@ export async function getStripeGenerationEntitlement(userId: number): Promise<{
   if (subscription.items.data.length !== 1) return null;
 
   const item = subscription.items.data[0];
-  if (!item || item.quantity !== 1 || !item.current_period_start) return null;
+  if (
+    !item ||
+    item.quantity !== 1 ||
+    !item.current_period_start ||
+    !item.current_period_end
+  )
+    return null;
 
   const classified = classifyGenerationPrice(item.price);
   if (!classified) return null;
   return {
     periodStart: new Date(item.current_period_start * 1000),
+    periodEnd: new Date(item.current_period_end * 1000),
     enforceAllowance: classified.enforceAllowance,
     ...(classified.enforceAllowance ? { planId: classified.planId } : {}),
   };
 }
 
-/** Verify an exact, paid USD $15 checkout before allowing its generation. */
+/** Verify an exact, paid additional-video checkout before allowing its generation. */
 export async function verifyAdditionalVideoCheckout(
   sessionId: string,
-  userId: number,
+  userId: number
 ): Promise<boolean> {
   if (!sessionId.startsWith("cs_")) return false;
 
@@ -300,28 +347,48 @@ export async function verifyAdditionalVideoCheckout(
     stripe.checkout.sessions.listLineItems(sessionId, { limit: 2 }),
   ]);
   const item = lineItems.data[0];
-  const itemPriceId =
-    typeof item?.price === "string" ? item.price : item?.price?.id;
+  const itemPrice =
+    typeof item?.price === "string"
+      ? await stripe.prices.retrieve(item.price)
+      : item?.price;
+  const isCurrentPrice =
+    itemPrice?.id === expectedPriceId && isExactAdditionalVideoPrice(itemPrice);
+  const isLegacyPrice =
+    itemPrice?.lookup_key === "estatetour_additional_video_v2" &&
+    itemPrice.currency === "usd" &&
+    itemPrice.unit_amount === 1500 &&
+    itemPrice.recurring === null;
+  const expectedTotal = isCurrentPrice
+    ? ADDITIONAL_VIDEO_PRICE_CENTS
+    : isLegacyPrice
+      ? 1500
+      : null;
 
   return (
+    expectedTotal !== null &&
     session.mode === "payment" &&
     session.payment_status === "paid" &&
     session.currency === "usd" &&
-    session.amount_total === ADDITIONAL_VIDEO_PRICE_CENTS &&
+    session.amount_total === expectedTotal &&
     lineItems.data.length === 1 &&
     item?.quantity === 1 &&
-    itemPriceId === expectedPriceId &&
     session.metadata?.purchase_type === "additional_video" &&
     session.metadata?.user_id === userId.toString()
   );
 }
 
 /** POST /api/billing/portal — opens the Stripe billing portal. */
-export async function handlePortal(req: Request, res: Response, user: { id: number }) {
+export async function handlePortal(
+  req: Request,
+  res: Response,
+  user: { id: number }
+) {
   try {
     const sub = await db.getSubscription(user.id);
     if (!sub?.stripeCustomerId) {
-      res.status(400).json({ error: "No billing account yet — subscribe to a plan first" });
+      res
+        .status(400)
+        .json({ error: "No billing account yet — subscribe to a plan first" });
       return;
     }
     const stripe = getStripe();
@@ -335,6 +402,37 @@ export async function handlePortal(req: Request, res: Response, user: { id: numb
     console.error("[Billing] Portal error:", e);
     res.status(500).json({ error: "Billing portal unavailable" });
   }
+}
+
+/** Change an existing Stripe subscription to a recognized current plan. */
+export async function changeSubscriptionPlan(
+  userId: number,
+  planId: PlanId
+): Promise<void> {
+  const stored = await db.getSubscription(userId);
+  if (!stored?.stripeSubscriptionId) {
+    throw new Error("This user does not have a Stripe subscription to change");
+  }
+
+  const stripe = getStripe();
+  const subscription = await stripe.subscriptions.retrieve(
+    stored.stripeSubscriptionId
+  );
+  if (subscription.items.data.length !== 1) {
+    throw new Error("Only subscriptions with one plan item can be changed");
+  }
+
+  const priceId = await ensurePrice(planId);
+  const updated = await stripe.subscriptions.update(subscription.id, {
+    items: [{ id: subscription.items.data[0].id, price: priceId, quantity: 1 }],
+    proration_behavior: "create_prorations",
+    metadata: {
+      ...subscription.metadata,
+      user_id: userId.toString(),
+      plan_id: planId,
+    },
+  });
+  await syncSubscriptionToDb(updated);
 }
 
 /** Resolve the stored plan only from an exact, recognized Stripe price. */
@@ -351,7 +449,8 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
 
   if (!Number.isFinite(userId)) {
     // Fall back: find user via existing customer mapping.
-    const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+    const customerId =
+      typeof sub.customer === "string" ? sub.customer : sub.customer.id;
     const existing = await db.findSubscriptionByCustomerId(customerId);
     if (!existing) {
       console.warn("[Billing] Cannot map subscription to user:", sub.id);
@@ -361,15 +460,22 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
   }
 
   const plan = planFromSubscription(sub);
+  const periodStart = sub.items.data[0]?.current_period_start;
   const periodEnd = sub.items.data[0]?.current_period_end;
   await db.upsertSubscription(userId, {
-    stripeCustomerId: typeof sub.customer === "string" ? sub.customer : sub.customer.id,
+    stripeCustomerId:
+      typeof sub.customer === "string" ? sub.customer : sub.customer.id,
     stripeSubscriptionId: sub.id,
     plan,
     status: sub.status,
+    ...(periodStart
+      ? { currentPeriodStart: new Date(periodStart * 1000) }
+      : {}),
     ...(periodEnd ? { currentPeriodEnd: new Date(periodEnd * 1000) } : {}),
   });
-  console.log(`[Billing] Synced subscription ${sub.id} for user ${userId}: ${sub.status}`);
+  console.log(
+    `[Billing] Synced subscription ${sub.id} for user ${userId}: ${sub.status}`
+  );
 }
 
 /** POST /api/stripe/webhook — raw body required for signature verification. */
@@ -379,8 +485,13 @@ export async function handleWebhook(req: Request, res: Response) {
 
   let event: Stripe.Event;
   try {
-    if (!secret || !signature) throw new Error("Missing webhook secret or signature");
-    event = getStripe().webhooks.constructEvent(req.body, signature as string, secret);
+    if (!secret || !signature)
+      throw new Error("Missing webhook secret or signature");
+    event = getStripe().webhooks.constructEvent(
+      req.body,
+      signature as string,
+      secret
+    );
   } catch (e) {
     console.error("[Webhook] Signature verification failed:", e);
     res.status(400).json({ error: "Invalid signature" });
@@ -389,7 +500,9 @@ export async function handleWebhook(req: Request, res: Response) {
 
   // Test events must return the verification response.
   if (event.id.startsWith("evt_test_")) {
-    console.log("[Webhook] Test event detected, returning verification response");
+    console.log(
+      "[Webhook] Test event detected, returning verification response"
+    );
     res.json({ verified: true });
     return;
   }
@@ -407,9 +520,15 @@ export async function handleWebhook(req: Request, res: Response) {
           // Ensure user mapping survives even if subscription metadata is missing.
           if (!sub.metadata?.user_id && session.client_reference_id) {
             await getStripe().subscriptions.update(subId, {
-              metadata: { ...sub.metadata, user_id: session.client_reference_id },
+              metadata: {
+                ...sub.metadata,
+                user_id: session.client_reference_id,
+              },
             });
-            sub.metadata = { ...sub.metadata, user_id: session.client_reference_id };
+            sub.metadata = {
+              ...sub.metadata,
+              user_id: session.client_reference_id,
+            };
           }
           await syncSubscriptionToDb(sub);
         }
@@ -423,10 +542,12 @@ export async function handleWebhook(req: Request, res: Response) {
       }
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
-        const subId = (invoice as unknown as { subscription?: string | { id: string } }).subscription;
+        const subId = (
+          invoice as unknown as { subscription?: string | { id: string } }
+        ).subscription;
         if (subId) {
           const sub = await getStripe().subscriptions.retrieve(
-            typeof subId === "string" ? subId : subId.id,
+            typeof subId === "string" ? subId : subId.id
           );
           await syncSubscriptionToDb(sub);
         }

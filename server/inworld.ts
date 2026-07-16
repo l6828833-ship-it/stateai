@@ -82,7 +82,10 @@ export interface AnalysisResult {
 /** Clamp any duration into the valid Kling range and round to a whole second. */
 export function clampDuration(value: number | undefined | null): number {
   if (!value || !Number.isFinite(value)) return MIN_CLIP_DURATION;
-  return Math.max(MIN_CLIP_DURATION, Math.min(MAX_CLIP_DURATION, Math.round(value)));
+  return Math.max(
+    MIN_CLIP_DURATION,
+    Math.min(MAX_CLIP_DURATION, Math.round(value))
+  );
 }
 
 /** Clamp one AI-chosen shot length to [SEGMENT_MIN,SEGMENT_MAX]; default if absent. */
@@ -90,8 +93,29 @@ export function clampSegmentDuration(value: number | undefined | null): number {
   if (!value || !Number.isFinite(value)) return DEFAULT_SEGMENT_DURATION;
   return Math.max(
     SEGMENT_MIN_DURATION,
-    Math.min(SEGMENT_MAX_DURATION, Math.round(value)),
+    Math.min(SEGMENT_MAX_DURATION, Math.round(value))
   );
+}
+
+/** Keep the complete stitched tour within the advertised 15-second cap. */
+export function normalizeSegmentDurations(
+  values: Array<number | undefined | null>,
+  segmentCount: number
+): number[] {
+  const durations = Array.from({ length: segmentCount }, (_, index) =>
+    clampSegmentDuration(values[index])
+  );
+  let total = durations.reduce((sum, value) => sum + value, 0);
+  let cursor = 0;
+  while (total > MAX_CLIP_DURATION) {
+    const index = cursor % durations.length;
+    if (durations[index] > SEGMENT_MIN_DURATION) {
+      durations[index] -= 1;
+      total -= 1;
+    }
+    cursor += 1;
+  }
+  return durations;
 }
 
 /** Number of shots (Kling tasks) for a tour of the given image count. */
@@ -148,7 +172,7 @@ export async function analyzeAndOptimizePrompt(params: {
       `- Hero details and feature spaces → elegant, slow cinematic push-ins with warm, filmic lighting.`,
       `For each photo choose the single safest, most flattering camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) and note the chosen style.`,
       shotPlan,
-      `For EACH shot, choose its IDEAL length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION} (never longer than ${SEGMENT_MAX_DURATION}s). Give sweeping reveals and richer transitions more time and simple pushes less. Return them in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
+      `For EACH shot, choose its IDEAL length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION}. The SUM of all shot lengths must be no more than ${MAX_CLIP_DURATION} seconds. Return them in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
       `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the images in order (Image 1 → Image 2 → … → Image ${ordered.length}), smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the images strictly in the given order, starting on Image 1 and ending on Image ${ordered.length}.`,
       `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"segment_durations":number[]}`,
     ]
@@ -171,7 +195,9 @@ export async function analyzeAndOptimizePrompt(params: {
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Inworld prompt optimization failed (${resp.status}): ${text}`);
+    throw new Error(
+      `Inworld prompt optimization failed (${resp.status}): ${text}`
+    );
   }
 
   const data = (await resp.json()) as {
@@ -200,10 +226,9 @@ export async function analyzeAndOptimizePrompt(params: {
   const rawDurations = Array.isArray(parsed.segment_durations)
     ? (parsed.segment_durations as unknown[])
     : [];
-  const segmentDurations = Array.from({ length: segmentCount }, (_, i) =>
-    clampSegmentDuration(
-      typeof rawDurations[i] === "number" ? (rawDurations[i] as number) : undefined,
-    ),
+  const segmentDurations = normalizeSegmentDurations(
+    rawDurations.map(value => (typeof value === "number" ? value : undefined)),
+    segmentCount
   );
   const duration = segmentDurations.reduce((sum, value) => sum + value, 0);
 

@@ -3,14 +3,23 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { dataUrlToBase64, prepareImageForUpload } from "@/lib/imageUpload";
-import TourTool, { type ToolImage, type ToolSettings } from "@/components/TourTool";
-import GenerationTheater, { type TheaterMode } from "@/components/GenerationTheater";
+import TourTool, {
+  type ToolImage,
+  type ToolSettings,
+} from "@/components/TourTool";
+import GenerationTheater, {
+  type TheaterMode,
+} from "@/components/GenerationTheater";
 import PricingModal from "@/components/PricingModal";
 import DashboardSidebar from "@/components/DashboardSidebar";
 import DashboardBottomNav from "@/components/DashboardBottomNav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { clearDraft, loadDraftWithImages, saveDraft } from "@/hooks/useToolDraft";
+import {
+  clearDraft,
+  loadDraftWithImages,
+  saveDraft,
+} from "@/hooks/useToolDraft";
 import type { PlanId } from "@shared/plans";
 import {
   BadgeCheck,
@@ -41,7 +50,9 @@ function loadPendingAdditionalVideo(): PendingAdditionalVideo | null {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
   const checkoutSessionId =
-    params.get("additional_video") === "success" ? params.get("session_id") : null;
+    params.get("additional_video") === "success"
+      ? params.get("session_id")
+      : null;
   if (checkoutSessionId) return { sessionId: checkoutSessionId };
 
   try {
@@ -49,21 +60,28 @@ function loadPendingAdditionalVideo(): PendingAdditionalVideo | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PendingAdditionalVideo>;
     return typeof parsed.sessionId === "string"
-      ? { sessionId: parsed.sessionId, ...(parsed.jobId ? { jobId: parsed.jobId } : {}) }
+      ? {
+          sessionId: parsed.sessionId,
+          ...(parsed.jobId ? { jobId: parsed.jobId } : {}),
+        }
       : null;
   } catch {
     return null;
   }
 }
 
-function StatusBadge({ status }: { status: "processing" | "ready" | "failed" }) {
+function StatusBadge({
+  status,
+}: {
+  status: "processing" | "ready" | "failed";
+}) {
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium",
         status === "processing" && "bg-accent text-accent-foreground",
         status === "ready" && "bg-primary/15 text-primary",
-        status === "failed" && "bg-destructive/10 text-destructive",
+        status === "failed" && "bg-destructive/10 text-destructive"
       )}
     >
       {status === "processing" && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -106,7 +124,7 @@ export default function Dashboard() {
   const uploadMutation = trpc.tour.uploadImage.useMutation();
   const reorderMutation = trpc.tour.reorderImages.useMutation({
     onSuccess: () => utils.tour.getState.invalidate(),
-    onError: (e) => {
+    onError: e => {
       toast.error(e.message);
       utils.tour.getState.invalidate();
     },
@@ -116,15 +134,15 @@ export default function Dashboard() {
     // so the UI feels instant instead of waiting for the server + refetch.
     onMutate: async ({ imageId }) => {
       await utils.tour.getState.cancel();
-      utils.tour.getState.setData(undefined, (prev) => {
+      utils.tour.getState.setData(undefined, prev => {
         if (!prev) return prev;
         const images = prev.images
-          .filter((img) => img.id !== imageId)
+          .filter(img => img.id !== imageId)
           .map((img, idx) => ({ ...img, sequenceIndex: idx }));
         return { ...prev, images };
       });
     },
-    onError: (e) => {
+    onError: e => {
       // Roll back the optimistic removal by re-syncing with the server.
       toast.error(e.message);
       utils.tour.getState.invalidate();
@@ -139,17 +157,21 @@ export default function Dashboard() {
 
   // Redirect anonymous visitors to the sign-in page.
   useEffect(() => {
+    if (!authLoading && user?.forcePasswordChange) {
+      navigate("/change-password");
+      return;
+    }
     if (!authLoading && !isAuthenticated) {
       navigate("/login");
     }
-  }, [authLoading, isAuthenticated, navigate]);
+  }, [authLoading, isAuthenticated, navigate, user?.forcePasswordChange]);
 
   useEffect(() => {
     try {
       if (pendingAdditionalVideo) {
         localStorage.setItem(
           PENDING_ADDITIONAL_VIDEO_KEY,
-          JSON.stringify(pendingAdditionalVideo),
+          JSON.stringify(pendingAdditionalVideo)
         );
       } else {
         localStorage.removeItem(PENDING_ADDITIONAL_VIDEO_KEY);
@@ -164,7 +186,9 @@ export default function Dashboard() {
     const params = new URLSearchParams(window.location.search);
     const additionalStatus = params.get("additional_video");
     if (additionalStatus === "success" && pendingAdditionalVideo) {
-      toast.success("Your additional video is ready. Click Generate Tour Video to use it.");
+      toast.success(
+        "Your additional video is ready. Click Generate Tour Video to use it."
+      );
     } else if (additionalStatus === "cancelled") {
       toast.info("Additional-video checkout was cancelled");
     } else {
@@ -176,13 +200,14 @@ export default function Dashboard() {
     window.history.replaceState(
       {},
       "",
-      `${window.location.pathname}${query ? `?${query}` : ""}`,
+      `${window.location.pathname}${query ? `?${query}` : ""}`
     );
   }, [pendingAdditionalVideo]);
 
   // ===== One-time draft sync: restore homepage uploads/settings after signup =====
   useEffect(() => {
-    if (!isAuthenticated || !project || draftSyncedRef.current || draftSyncing) return;
+    if (!isAuthenticated || !project || draftSyncedRef.current || draftSyncing)
+      return;
 
     draftSyncedRef.current = true;
     setDraftSyncing(true);
@@ -217,14 +242,17 @@ export default function Dashboard() {
         await clearDraft();
         await utils.tour.getState.invalidate();
         if (draft.images.length > 0) {
-          toast.success("Your photos and settings were restored from the homepage");
+          toast.success(
+            "Your photos and settings were restored from the homepage"
+          );
         }
         if (shouldAutoGenerate) {
           // Continue the flow the user started before signing up.
           setTimeout(() => handleGenerateRef.current?.(), 800);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown upload error";
+        const message =
+          error instanceof Error ? error.message : "Unknown upload error";
         toast.error(`Your saved photos could not be restored: ${message}`);
         // Keep storage intact so transient browser/network failures are retryable.
         await utils.tour.getState.invalidate();
@@ -240,11 +268,11 @@ export default function Dashboard() {
     { jobId: activeJobId ?? 0 },
     {
       enabled: activeJobId !== null && theaterMode === "real",
-      refetchInterval: (query) => {
+      refetchInterval: query => {
         const status = query.state.data?.status;
         return status === "processing" ? 5000 : false;
       },
-    },
+    }
   );
   const activeJob = pollQuery.data ?? null;
 
@@ -258,7 +286,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!pendingAdditionalVideo?.jobId || !jobsQuery.data) return;
     const purchasedJob = jobsQuery.data.find(
-      (job) => job.id === pendingAdditionalVideo.jobId,
+      job => job.id === pendingAdditionalVideo.jobId
     );
     if (purchasedJob?.status === "ready") {
       setPendingAdditionalVideo(null);
@@ -268,7 +296,7 @@ export default function Dashboard() {
       // selection, allowing normal plan generations to continue.
       setPendingAdditionalVideo(null);
       toast.error(
-        "Your paid additional video failed and was not resubmitted. Contact support for a refund or replacement.",
+        "Your paid additional video failed and was not resubmitted. Contact support for a refund or replacement."
       );
     }
   }, [jobsQuery.data, pendingAdditionalVideo]);
@@ -277,7 +305,7 @@ export default function Dashboard() {
     () => () => {
       if (pricingTimerRef.current) clearTimeout(pricingTimerRef.current);
     },
-    [],
+    []
   );
 
   const handleOpenPricing = useCallback(() => {
@@ -318,10 +346,13 @@ export default function Dashboard() {
           base64Data: dataUrlToBase64(prepared.dataUrl),
         });
         if (prepared.optimized) {
-          toast.info(`${file.name} was optimized for a reliable high-quality upload`);
+          toast.info(
+            `${file.name} was optimized for a reliable high-quality upload`
+          );
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown upload error";
+        const message =
+          error instanceof Error ? error.message : "Unknown upload error";
         toast.error(`Failed to upload ${file.name}: ${message}`);
       }
     }
@@ -330,11 +361,11 @@ export default function Dashboard() {
 
   const handleReorder = (orderedIds: Array<string | number>) => {
     if (!project) return;
-    const ids = orderedIds.map((id) => Number(id));
+    const ids = orderedIds.map(id => Number(id));
     // Optimistic: update cache immediately.
-    utils.tour.getState.setData(undefined, (prev) => {
+    utils.tour.getState.setData(undefined, prev => {
       if (!prev) return prev;
-      const byId = new Map(prev.images.map((i) => [i.id, i]));
+      const byId = new Map(prev.images.map(i => [i.id, i]));
       const reordered = ids
         .map((id, idx) => {
           const img = byId.get(id);
@@ -353,8 +384,8 @@ export default function Dashboard() {
   const handleSettingsChange = (patch: Partial<ToolSettings>) => {
     if (!project) return;
     // Optimistic cache update for snappy UI.
-    utils.tour.getState.setData(undefined, (prev) =>
-      prev ? { ...prev, project: { ...prev.project, ...patch } } : prev,
+    utils.tour.getState.setData(undefined, prev =>
+      prev ? { ...prev, project: { ...prev.project, ...patch } } : prev
     );
     settingsMutation.mutate({
       projectId: project.id,
@@ -398,7 +429,9 @@ export default function Dashboard() {
     // SUBSCRIBER: real, costly generation.
     try {
       setTheaterMode("real");
-      document.getElementById("output-theater")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document
+        .getElementById("output-theater")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
       const job = await generateMutation.mutateAsync({
         projectId: project.id,
         ...(pendingAdditionalVideo
@@ -410,7 +443,7 @@ export default function Dashboard() {
           setPendingAdditionalVideo(null);
           toast.error(
             job.errorMessage ||
-              "Your paid additional video failed. Contact support for a refund or replacement.",
+              "Your paid additional video failed. Contact support for a refund or replacement."
           );
         } else {
           setPendingAdditionalVideo({
@@ -423,7 +456,9 @@ export default function Dashboard() {
       jobsQuery.refetch();
     } catch (e) {
       setTheaterMode("idle");
-      toast.error(e instanceof Error ? e.message : "Generation failed to start");
+      toast.error(
+        e instanceof Error ? e.message : "Generation failed to start"
+      );
       jobsQuery.refetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -436,18 +471,41 @@ export default function Dashboard() {
 
   const handleSelectPlan = async (planId: PlanId) => {
     try {
-      // Stripe checkout is wired via the billing router (phase 5).
-      const res = await fetch(`/api/billing/checkout?plan=${planId}`, { method: "POST" });
+      const res = await fetch(`/api/billing/checkout?plan=${planId}`, {
+        method: "POST",
+      });
       const data = (await res.json()) as { url?: string; error?: string };
       if (data.url) {
         window.location.href = data.url;
       } else {
-        toast.error(data.error || "Could not start checkout — please try again");
+        toast.error(
+          data.error || "Could not start checkout — please try again"
+        );
       }
     } catch {
       toast.error("Could not start checkout — please try again");
     }
   };
+
+  // Continue an explicit pricing choice made on the public site after sign-up.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let selectedPlan: string | null = null;
+    try {
+      selectedPlan = localStorage.getItem("estatetour_selected_plan");
+      if (selectedPlan) localStorage.removeItem("estatetour_selected_plan");
+    } catch {
+      return;
+    }
+    if (
+      selectedPlan &&
+      /^(starter|creator|studio)_(monthly|yearly)$/.test(selectedPlan)
+    ) {
+      void handleSelectPlan(selectedPlan as PlanId);
+    }
+    // Run once when authentication becomes available; the storage key is removed first.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const handleBuyAdditionalVideo = async () => {
     if (pendingAdditionalVideo) {
@@ -455,7 +513,9 @@ export default function Dashboard() {
       return;
     }
     try {
-      const response = await fetch("/api/billing/additional-video", { method: "POST" });
+      const response = await fetch("/api/billing/additional-video", {
+        method: "POST",
+      });
       const data = (await response.json()) as { url?: string; error?: string };
       if (data.url) {
         window.location.href = data.url;
@@ -501,8 +561,11 @@ export default function Dashboard() {
   const handleCreateClick = () => {
     setActiveSection("create");
     setTimeout(
-      () => document.getElementById("tour-tool")?.scrollIntoView({ behavior: "smooth" }),
-      50,
+      () =>
+        document
+          .getElementById("tour-tool")
+          ?.scrollIntoView({ behavior: "smooth" }),
+      50
     );
   };
 
@@ -517,7 +580,7 @@ export default function Dashboard() {
   }
   if (!isAuthenticated) return null;
 
-  const toolImages: ToolImage[] = serverImages.map((img) => ({
+  const toolImages: ToolImage[] = serverImages.map(img => ({
     id: img.id,
     previewUrl: img.url,
     fileName: img.fileName ?? "photo",
@@ -530,8 +593,8 @@ export default function Dashboard() {
 
   const firstImageUrl = toolImages[0]?.previewUrl ?? null;
   const jobs = jobsQuery.data ?? [];
-  const readyCount = jobs.filter((j) => j.status === "ready").length;
-  const processingCount = jobs.filter((j) => j.status === "processing").length;
+  const readyCount = jobs.filter(j => j.status === "ready").length;
+  const processingCount = jobs.filter(j => j.status === "processing").length;
 
   const sectionTitle =
     activeSection === "videos"
@@ -554,7 +617,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <ul className="space-y-3">
-          {jobs.map((job) => (
+          {jobs.map(job => (
             <li
               key={job.id}
               className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
@@ -580,7 +643,9 @@ export default function Dashboard() {
                   {new Date(job.createdAt).toLocaleString()}
                 </p>
                 <div className="mt-1">
-                  <StatusBadge status={job.status as "processing" | "ready" | "failed"} />
+                  <StatusBadge
+                    status={job.status as "processing" | "ready" | "failed"}
+                  />
                 </div>
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
@@ -618,7 +683,7 @@ export default function Dashboard() {
                       className="btn-springy h-7 rounded-full px-2.5 text-xs"
                       onClick={() =>
                         toast.error(
-                          "This paid additional video was not resubmitted. Contact support for a refund or replacement.",
+                          "This paid additional video was not resubmitted. Contact support for a refund or replacement."
                         )
                       }
                     >
@@ -668,7 +733,10 @@ export default function Dashboard() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <a href="/" className="flex items-center gap-2 font-display text-base text-foreground">
+          <a
+            href="/"
+            className="flex items-center gap-2 font-display text-base text-foreground"
+          >
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Clapperboard className="h-3.5 w-3.5" />
             </span>
@@ -694,8 +762,12 @@ export default function Dashboard() {
           {/* Section header */}
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
             <div>
-              <h1 className="font-display text-2xl text-foreground sm:text-3xl">{sectionTitle}</h1>
-              <p className="mt-1 text-sm text-muted-foreground">{sectionSubtitle}</p>
+              <h1 className="font-display text-2xl text-foreground sm:text-3xl">
+                {sectionTitle}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {sectionSubtitle}
+              </p>
             </div>
             {/* Desktop plan actions */}
             <div className="hidden items-center gap-2 lg:flex">
@@ -704,7 +776,9 @@ export default function Dashboard() {
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
                     <Crown className="h-3.5 w-3.5 text-primary" />
                     {currentPlan
-                      ? currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1)
+                      ? currentPlan
+                          .replaceAll("_", " ")
+                          .replace(/\b\w/g, letter => letter.toUpperCase())
                       : "Active"}{" "}
                     plan
                   </span>
@@ -739,7 +813,10 @@ export default function Dashboard() {
           {/* ===== CREATE SECTION ===== */}
           {activeSection === "create" && (
             <div className="grid gap-8 xl:grid-cols-[1fr_minmax(20rem,26rem)]">
-              <section id="tour-tool" className="glass-panel rounded-3xl p-6 sm:p-8">
+              <section
+                id="tour-tool"
+                className="glass-panel rounded-3xl p-6 sm:p-8"
+              >
                 <TourTool
                   images={toolImages}
                   settings={settings}
@@ -751,7 +828,8 @@ export default function Dashboard() {
                   generateLabel="Generate Tour Video"
                   generating={
                     generateMutation.isPending ||
-                    (theaterMode === "real" && activeJob?.status === "processing")
+                    (theaterMode === "real" &&
+                      activeJob?.status === "processing")
                   }
                   disabled={draftSyncing}
                 />
@@ -794,7 +872,9 @@ export default function Dashboard() {
                       fakeComplete={fakePreviewComplete}
                       canPlayVideo={subscribed}
                       onUnlockClick={handleOpenPricing}
-                      onDownload={() => activeJobId && handleDownload(activeJobId)}
+                      onDownload={() =>
+                        activeJobId && handleDownload(activeJobId)
+                      }
                     />
                   )}
                 </section>
@@ -832,18 +912,34 @@ export default function Dashboard() {
             <div className="space-y-6">
               <div className="grid gap-4 sm:grid-cols-3">
                 {[
-                  { label: "Videos ready", value: readyCount, icon: BadgeCheck },
-                  { label: "Rendering now", value: processingCount, icon: Sparkles },
-                  { label: "Total generated", value: jobs.length, icon: TrendingUp },
-                ].map((s) => (
+                  {
+                    label: "Videos ready",
+                    value: readyCount,
+                    icon: BadgeCheck,
+                  },
+                  {
+                    label: "Rendering now",
+                    value: processingCount,
+                    icon: Sparkles,
+                  },
+                  {
+                    label: "Total generated",
+                    value: jobs.length,
+                    icon: TrendingUp,
+                  },
+                ].map(s => (
                   <div key={s.label} className="glass-panel rounded-2xl p-5">
                     <div className="flex items-center justify-between">
                       <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent">
                         <s.icon className="h-5 w-5 text-primary" />
                       </span>
-                      <span className="text-3xl font-semibold text-foreground">{s.value}</span>
+                      <span className="text-3xl font-semibold text-foreground">
+                        {s.value}
+                      </span>
                     </div>
-                    <p className="mt-3 text-sm text-muted-foreground">{s.label}</p>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {s.label}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -863,7 +959,8 @@ export default function Dashboard() {
                     className="btn-springy mt-4 rounded-full"
                     onClick={handleBuyAdditionalVideo}
                   >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Buy additional video · $15
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Buy additional
+                    video · $17
                   </Button>
                 ) : (
                   <Button
@@ -876,12 +973,12 @@ export default function Dashboard() {
                 )}
                 <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-primary" /> {readyCount} tours ready to
-                    share
+                    <CheckCircle2 className="h-4 w-4 text-primary" />{" "}
+                    {readyCount} tours ready to share
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-primary" /> {serverImages.length} photos in
-                    your current project
+                    <CheckCircle2 className="h-4 w-4 text-primary" />{" "}
+                    {serverImages.length} photos in your current project
                   </li>
                 </ul>
               </div>

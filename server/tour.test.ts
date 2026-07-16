@@ -6,9 +6,8 @@ describe("tour configuration", () => {
     expect([...TOUR_STYLES]).toEqual(["Walkthrough", "Drone", "Cinematic"]);
   });
 
-  it("caps uploads at a sane maximum", () => {
-    expect(MAX_IMAGES).toBeGreaterThanOrEqual(10);
-    expect(MAX_IMAGES).toBeLessThanOrEqual(30);
+  it("caps uploads at the six images promised by every plan", () => {
+    expect(MAX_IMAGES).toBe(6);
   });
 });
 
@@ -58,7 +57,7 @@ describe("strict image ordering", () => {
     // No DB connection needed to validate the guard clause shape — call with
     // a project that has no images and expect a validation error.
     await expect(
-      db.reorderProjectImages(999999, 999999, [1, 2, 3]),
+      db.reorderProjectImages(999999, 999999, [1, 2, 3])
     ).rejects.toThrow();
   });
 });

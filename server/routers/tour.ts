@@ -5,14 +5,15 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_SIZE_MB,
   MAX_IMAGES,
+  type PlanId,
 } from "@shared/plans";
 import * as db from "../db";
 import {
   analyzeAndOptimizePrompt,
   assertInworldConfigured,
   buildFallbackPrompt,
-  clampSegmentDuration,
   defaultDurationFor,
+  normalizeSegmentDurations,
 } from "../inworld";
 import {
   assertKlingConfigured,
@@ -34,7 +35,7 @@ import {
   getStripeGenerationEntitlement,
   verifyAdditionalVideoCheckout,
 } from "../billing";
-import { protectedProcedure, router } from "../_core/trpc";
+import { appProcedure, router } from "../_core/trpc";
 
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -88,7 +89,8 @@ function isValidJpeg(buffer: Buffer): boolean {
     if (offset + 2 > buffer.length) return false;
 
     const segmentLength = buffer.readUInt16BE(offset);
-    if (segmentLength < 2 || offset + segmentLength > buffer.length) return false;
+    if (segmentLength < 2 || offset + segmentLength > buffer.length)
+      return false;
     if (isJpegStartOfFrame(marker)) {
       if (segmentLength < 7) return false;
       const height = buffer.readUInt16BE(offset + 3);
@@ -119,8 +121,12 @@ function isValidPng(buffer: Buffer): boolean {
     if (chunkEnd > buffer.length) return false;
 
     if (type === "IHDR") {
-      if (foundHeader || offset !== PNG_SIGNATURE.length || length !== 13) return false;
-      if (buffer.readUInt32BE(offset + 8) === 0 || buffer.readUInt32BE(offset + 12) === 0) {
+      if (foundHeader || offset !== PNG_SIGNATURE.length || length !== 13)
+        return false;
+      if (
+        buffer.readUInt32BE(offset + 8) === 0 ||
+        buffer.readUInt32BE(offset + 12) === 0
+      ) {
         return false;
       }
       foundHeader = true;
@@ -128,7 +134,12 @@ function isValidPng(buffer: Buffer): boolean {
       if (!foundHeader || length === 0) return false;
       foundImageData = true;
     } else if (type === "IEND") {
-      return foundHeader && foundImageData && length === 0 && chunkEnd === buffer.length;
+      return (
+        foundHeader &&
+        foundImageData &&
+        length === 0 &&
+        chunkEnd === buffer.length
+      );
     }
     offset = chunkEnd;
   }
@@ -177,7 +188,9 @@ function hasValidImageStructure(buffer: Buffer, mimeType: string): boolean {
 }
 
 /** Strip server-only fields before returning a job to the client. */
-type GenerationJob = NonNullable<Awaited<ReturnType<typeof db.getGenerationJob>>>;
+type GenerationJob = NonNullable<
+  Awaited<ReturnType<typeof db.getGenerationJob>>
+>;
 
 function isAdditionalVideoJob(imageSequence: string | null): boolean {
   if (!imageSequence) return false;
@@ -185,10 +198,10 @@ function isAdditionalVideoJob(imageSequence: string | null): boolean {
     const parsed = JSON.parse(imageSequence) as unknown;
     return Boolean(
       parsed &&
-        typeof parsed === "object" &&
-        "additionalCheckoutSessionId" in parsed &&
-        typeof (parsed as { additionalCheckoutSessionId?: unknown })
-          .additionalCheckoutSessionId === "string",
+      typeof parsed === "object" &&
+      "additionalCheckoutSessionId" in parsed &&
+      typeof (parsed as { additionalCheckoutSessionId?: unknown })
+        .additionalCheckoutSessionId === "string"
     );
   } catch {
     return false;
@@ -288,7 +301,7 @@ function imageCountFromSequence(imageSequence: string | null): number {
 async function pollLegacySingleTaskJob(
   userId: number,
   jobId: number,
-  klingTaskId: string,
+  klingTaskId: string
 ): Promise<void> {
   let poll: Awaited<ReturnType<typeof pollKlingJob>>;
   try {
@@ -307,9 +320,13 @@ async function pollLegacySingleTaskJob(
       const { key, url } = await storagePut(
         `user-${userId}/videos/job-${jobId}.mp4`,
         videoBuffer,
-        "video/mp4",
+        "video/mp4"
       );
-      await db.updateGenerationJob(jobId, { status: "ready", videoKey: key, videoUrl: url });
+      await db.updateGenerationJob(jobId, {
+        status: "ready",
+        videoKey: key,
+        videoUrl: url,
+      });
     } catch (error) {
       console.error("[Generation] Archival error for job", jobId, error);
       await db.updateGenerationJob(jobId, {
@@ -319,30 +336,38 @@ async function pollLegacySingleTaskJob(
       });
     }
   } else if (poll.status === "failed") {
-    console.error("[Generation] Kling job failed", { jobId, providerError: poll.error });
+    console.error("[Generation] Kling job failed", {
+      jobId,
+      providerError: poll.error,
+    });
     await db.updateGenerationJob(jobId, {
       status: "failed",
-      errorMessage: "Video generation failed. Please try again or contact support.",
+      errorMessage:
+        "Video generation failed. Please try again or contact support.",
     });
   }
 }
 
 /** Build public HTTPS URLs for stored images so external APIs can fetch them. */
 async function toPublicOrderedImages(
-  images: Array<{ sequenceIndex: number; fileKey: string; roomTag: string | null }>,
+  images: Array<{
+    sequenceIndex: number;
+    fileKey: string;
+    roomTag: string | null;
+  }>
 ): Promise<OrderedImage[]> {
   return Promise.all(
-    images.map(async (img) => ({
+    images.map(async img => ({
       sequenceIndex: img.sequenceIndex,
       publicUrl: await storageGetSignedUrl(img.fileKey),
       roomTag: img.roomTag,
-    })),
+    }))
   );
 }
 
 export const tourRouter = router({
   /** Full tool state: active project + strictly ordered images + subscription flag. */
-  getState: protectedProcedure.query(async ({ ctx }) => {
+  getState: appProcedure.query(async ({ ctx }) => {
     const storedProject = await db.getOrCreateActiveProject(ctx.user.id);
     const project = isVideoAspectRatio(storedProject.aspectRatio)
       ? storedProject
@@ -354,10 +379,10 @@ export const tourRouter = router({
     }
     const images = await db.getProjectImages(project.id, ctx.user.id);
     const clientImages = await Promise.all(
-      images.map(async (image) => ({
+      images.map(async image => ({
         ...image,
         url: (await signStoredMediaUrl(image.url)) ?? image.url,
-      })),
+      }))
     );
     const subscribed = await db.hasActiveSubscription(ctx.user.id);
     const subscription = await db.getSubscription(ctx.user.id);
@@ -369,17 +394,21 @@ export const tourRouter = router({
     };
   }),
 
-  updateSettings: protectedProcedure
+  updateSettings: appProcedure
     .input(
       z.object({
         projectId: z.number(),
         name: z.string().max(255).optional(),
         aspectRatio: z.enum(["16:9", "9:16", "1:1"]).optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const project = await db.getProjectById(input.projectId, ctx.user.id);
-      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      if (!project)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
       const { projectId, ...settings } = input;
       await db.updateProjectSettings(projectId, ctx.user.id, settings);
       return { success: true } as const;
@@ -390,7 +419,7 @@ export const tourRouter = router({
    * The index is appended at the end (max+1) atomically per-request, so the
    * uploaded order can never collide even with concurrent uploads.
    */
-  uploadImage: protectedProcedure
+  uploadImage: appProcedure
     .input(
       z.object({
         projectId: z.number(),
@@ -401,14 +430,18 @@ export const tourRouter = router({
           .min(1, "Image data is empty")
           .max(
             MAX_IMAGE_BASE64_LENGTH,
-            `Image is too large. Maximum size is ${MAX_IMAGE_SIZE_MB} MB`,
+            `Image is too large. Maximum size is ${MAX_IMAGE_SIZE_MB} MB`
           ),
         roomTag: z.string().max(64).optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const project = await db.getProjectById(input.projectId, ctx.user.id);
-      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      if (!project)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
 
       const existing = await db.getProjectImages(project.id, ctx.user.id);
       if (existing.length >= MAX_IMAGES) {
@@ -420,7 +453,10 @@ export const tourRouter = router({
 
       const buffer = decodeCanonicalBase64(input.base64Data);
       if (!buffer) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Image data is invalid" });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Image data is invalid",
+        });
       }
       if (buffer.length > MAX_IMAGE_BYTES) {
         throw new TRPCError({
@@ -431,12 +467,19 @@ export const tourRouter = router({
       if (!hasValidImageStructure(buffer, input.mimeType)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Image is invalid or its file type does not match its contents",
+          message:
+            "Image is invalid or its file type does not match its contents",
         });
       }
 
-      const ext = input.mimeType === "image/png" ? "png" : input.mimeType === "image/webp" ? "webp" : "jpg";
-      const nextIndex = (await db.getMaxSequenceIndex(project.id, ctx.user.id)) + 1;
+      const ext =
+        input.mimeType === "image/png"
+          ? "png"
+          : input.mimeType === "image/webp"
+            ? "webp"
+            : "jpg";
+      const nextIndex =
+        (await db.getMaxSequenceIndex(project.id, ctx.user.id)) + 1;
       // Sequence index is embedded in the object key for traceability.
       const relKey = `user-${ctx.user.id}/project-${project.id}/seq-${String(nextIndex).padStart(3, "0")}.${ext}`;
       const { key, url } = await storagePut(relKey, buffer, input.mimeType);
@@ -458,13 +501,26 @@ export const tourRouter = router({
     }),
 
   /** Reorder: array index = new sequenceIndex. Set must match exactly. */
-  reorderImages: protectedProcedure
-    .input(z.object({ projectId: z.number(), orderedImageIds: z.array(z.number()).min(1) }))
+  reorderImages: appProcedure
+    .input(
+      z.object({
+        projectId: z.number(),
+        orderedImageIds: z.array(z.number()).min(1),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const project = await db.getProjectById(input.projectId, ctx.user.id);
-      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      if (!project)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
       try {
-        await db.reorderProjectImages(project.id, ctx.user.id, input.orderedImageIds);
+        await db.reorderProjectImages(
+          project.id,
+          ctx.user.id,
+          input.orderedImageIds
+        );
       } catch (e) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -474,14 +530,14 @@ export const tourRouter = router({
       return { success: true } as const;
     }),
 
-  deleteImage: protectedProcedure
+  deleteImage: appProcedure
     .input(z.object({ imageId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       await db.deleteProjectImage(input.imageId, ctx.user.id);
       return { success: true } as const;
     }),
 
-  updateRoomTag: protectedProcedure
+  updateRoomTag: appProcedure
     .input(z.object({ imageId: z.number(), roomTag: z.string().max(64) }))
     .mutation(async ({ ctx, input }) => {
       await db.updateImageRoomTag(input.imageId, ctx.user.id, input.roomTag);
@@ -496,12 +552,12 @@ export const tourRouter = router({
    *   3. hidden LLM analysis/prompt optimization (never returned to client)
    *   4. submit an official Kling 3.0 image-to-video task and persist its id
    */
-  generate: protectedProcedure
+  generate: appProcedure
     .input(
       z.object({
         projectId: z.number(),
         additionalCheckoutSessionId: z.string().max(255).optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const subscribed = await db.hasActiveSubscription(ctx.user.id);
@@ -513,13 +569,19 @@ export const tourRouter = router({
       }
 
       const project = await db.getProjectById(input.projectId, ctx.user.id);
-      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      if (!project)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
 
       const aspectRatio = isVideoAspectRatio(project.aspectRatio)
         ? project.aspectRatio
         : "16:9";
       if (aspectRatio !== project.aspectRatio) {
-        await db.updateProjectSettings(project.id, ctx.user.id, { aspectRatio });
+        await db.updateProjectSettings(project.id, ctx.user.id, {
+          aspectRatio,
+        });
       }
 
       try {
@@ -529,13 +591,17 @@ export const tourRouter = router({
         console.error("[Generation] Provider configuration error", error);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Video generation is not configured. Please contact support.",
+          message:
+            "Video generation is not configured. Please contact support.",
         });
       }
 
       const images = await db.getProjectImages(project.id, ctx.user.id);
       if (images.length < 1) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Upload at least one photo first" });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Upload at least one photo first",
+        });
       }
       if (images.length > MAX_IMAGES) {
         throw new TRPCError({
@@ -544,12 +610,15 @@ export const tourRouter = router({
         });
       }
       // Validate strict, gapless ordering before spending anything.
-      const sorted = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+      const sorted = [...images].sort(
+        (a, b) => a.sequenceIndex - b.sequenceIndex
+      );
       for (let i = 0; i < sorted.length; i++) {
         if (sorted[i].sequenceIndex !== i) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: "Image sequence is inconsistent — please reorder your photos and try again",
+            message:
+              "Image sequence is inconsistent — please reorder your photos and try again",
           });
         }
       }
@@ -559,7 +628,7 @@ export const tourRouter = router({
         try {
           const paid = await verifyAdditionalVideoCheckout(
             input.additionalCheckoutSessionId,
-            ctx.user.id,
+            ctx.user.id
           );
           if (!paid) {
             throw new TRPCError({
@@ -570,7 +639,10 @@ export const tourRouter = router({
           additionalCheckoutSessionId = input.additionalCheckoutSessionId;
         } catch (error) {
           if (error instanceof TRPCError) throw error;
-          console.error("[Generation] Additional-video verification failed", error);
+          console.error(
+            "[Generation] Additional-video verification failed",
+            error
+          );
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "The additional-video payment could not be verified",
@@ -579,16 +651,25 @@ export const tourRouter = router({
       }
 
       let billingEntitlement:
-        | { periodStart: Date; enforceAllowance: boolean; planId?: "annual" | "pro" }
+        | {
+            periodStart: Date;
+            periodEnd: Date;
+            enforceAllowance: boolean;
+            planId?: PlanId;
+          }
         | undefined;
       try {
         billingEntitlement =
           (await getStripeGenerationEntitlement(ctx.user.id)) ?? undefined;
       } catch (error) {
-        console.error("[Generation] Could not verify Stripe entitlement", error);
+        console.error(
+          "[Generation] Could not verify Stripe entitlement",
+          error
+        );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Your plan allowance could not be verified. Please try again.",
+          message:
+            "Your plan allowance could not be verified. Please try again.",
         });
       }
 
@@ -605,21 +686,22 @@ export const tourRouter = router({
           clipDuration: defaultDurationFor(sorted.length),
           thumbnailUrl: sorted[0]?.url ?? null,
         },
-        sorted.map((image) => image.id),
+        sorted.map(image => image.id),
         additionalCheckoutSessionId,
-        billingEntitlement,
+        billingEntitlement
       );
       if (!reservation.ok) {
         if (reservation.reason === "limit_reached") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: `Your plan's ${reservation.allowance}-video allowance is used. Additional videos are $15 each.`,
+            message: `Your plan's ${reservation.allowance}-video allowance is used. Additional videos are $17 each.`,
           });
         }
         if (reservation.reason === "period_unavailable") {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: "Your plan allowance could not be verified. Please contact support.",
+            message:
+              "Your plan allowance could not be verified. Please contact support.",
           });
         }
         throw new TRPCError({
@@ -641,11 +723,16 @@ export const tourRouter = router({
         let optimizedPrompt: string;
         let segmentDurations: number[];
         try {
-          const analysis = await analyzeAndOptimizePrompt({ images: orderedPublic });
+          const analysis = await analyzeAndOptimizePrompt({
+            images: orderedPublic,
+          });
           optimizedPrompt = analysis.optimizedPrompt;
           segmentDurations = analysis.segmentDurations;
         } catch (e) {
-          console.warn("[Generation] Prompt optimization failed, using fallback:", e);
+          console.warn(
+            "[Generation] Prompt optimization failed, using fallback:",
+            e
+          );
           optimizedPrompt = buildFallbackPrompt(sorted.length);
           segmentDurations = []; // per-segment default applied below
         }
@@ -655,10 +742,11 @@ export const tourRouter = router({
         // and optional last frame per task). Segments are polled and stitched
         // back together later. One image → one single-frame segment.
         const segments = planKlingSegments(orderedPublic);
-        // The AI picks each shot's length (capped at 6s); clamp defensively and
-        // fall back to the default for any shot the model omitted.
-        const durations = segments.map((segment) =>
-          clampSegmentDuration(segmentDurations[segment.index]),
+        // Normalize defensively so the complete stitched video stays at or
+        // below the product-wide 15-second limit.
+        const durations = normalizeSegmentDurations(
+          segments.map(segment => segmentDurations[segment.index]),
+          segments.length
         );
         const totalDuration = durations.reduce((sum, value) => sum + value, 0);
 
@@ -696,7 +784,7 @@ export const tourRouter = router({
         if (sawAmbiguousSegment) {
           console.warn(
             "[Generation] One or more Kling segment submissions were ambiguous; pollJob will reconcile by external id",
-            { jobId: job.id },
+            { jobId: job.id }
           );
         }
 
@@ -706,7 +794,10 @@ export const tourRouter = router({
         console.error("[Generation] Submission failed", error);
         const message =
           "Video generation could not be started. Please try again or contact support.";
-        await db.updateGenerationJob(job.id, { status: "failed", errorMessage: message });
+        await db.updateGenerationJob(job.id, {
+          status: "failed",
+          errorMessage: message,
+        });
         if (additionalCheckoutSessionId) {
           // The paid Session is already consumed by this at-most-once job.
           // Return the terminal job so the browser can immediately clear its
@@ -729,11 +820,12 @@ export const tourRouter = router({
    *   succeeded, their videos are downloaded in order, concatenated into one
    *   MP4, and archived. A single failed segment fails the whole job.
    */
-  pollJob: protectedProcedure
+  pollJob: appProcedure
     .input(z.object({ jobId: z.number() }))
     .query(async ({ ctx, input }) => {
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
-      if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
+      if (!job)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
       const includeVideo = await db.hasActiveSubscription(ctx.user.id);
       if (job.status !== "processing") {
         return toClientJobWithMedia(job, includeVideo);
@@ -743,12 +835,16 @@ export const tourRouter = router({
       // submission Kling never actually accepted) so it stops holding a plan
       // allowance slot. Failed jobs are excluded from the allowance count.
       if (Date.now() - job.createdAt.getTime() > MAX_PROCESSING_AGE_MS) {
-        console.error("[Generation] Job exceeded max processing age; failing to free allowance", {
-          jobId: job.id,
-        });
+        console.error(
+          "[Generation] Job exceeded max processing age; failing to free allowance",
+          {
+            jobId: job.id,
+          }
+        );
         await db.updateGenerationJob(job.id, {
           status: "failed",
-          errorMessage: "Video generation timed out. Please try again or contact support.",
+          errorMessage:
+            "Video generation timed out. Please try again or contact support.",
         });
         const timedOut = await db.getGenerationJob(job.id, ctx.user.id);
         return toClientJobWithMedia(timedOut!, includeVideo);
@@ -770,34 +866,39 @@ export const tourRouter = router({
       }
       const segmentCount = Math.max(1, imageCount - 1);
       const externalIds = Array.from({ length: segmentCount }, (_, i) =>
-        klingSegmentExternalTaskId(job.id, i),
+        klingSegmentExternalTaskId(job.id, i)
       );
 
       let segments: Awaited<ReturnType<typeof pollKlingSegments>>;
       try {
         segments = await pollKlingSegments(externalIds);
       } catch (error) {
-        console.warn("[Generation] Kling segment poll error", { jobId: job.id, error });
+        console.warn("[Generation] Kling segment poll error", {
+          jobId: job.id,
+          error,
+        });
         return toClientJobWithMedia(job, includeVideo);
       }
 
-      if (segments.some((segment) => segment.status === "failed")) {
+      if (segments.some(segment => segment.status === "failed")) {
         console.error("[Generation] A Kling segment failed", {
           jobId: job.id,
           errors: segments
-            .filter((segment) => segment.status === "failed")
-            .map((segment) => segment.error),
+            .filter(segment => segment.status === "failed")
+            .map(segment => segment.error),
         });
         await db.updateGenerationJob(job.id, {
           status: "failed",
-          errorMessage: "Video generation failed. Please try again or contact support.",
+          errorMessage:
+            "Video generation failed. Please try again or contact support.",
         });
         const failed = await db.getGenerationJob(job.id, ctx.user.id);
         return toClientJobWithMedia(failed!, includeVideo);
       }
 
       const allReady = segments.every(
-        (segment) => segment.found && segment.status === "completed" && segment.videoUrl,
+        segment =>
+          segment.found && segment.status === "completed" && segment.videoUrl
       );
       if (!allReady) {
         return toClientJobWithMedia(job, includeVideo); // keep processing
@@ -816,7 +917,7 @@ export const tourRouter = router({
         const { key, url } = await storagePut(
           `user-${ctx.user.id}/videos/job-${job.id}.mp4`,
           finalVideo,
-          "video/mp4",
+          "video/mp4"
         );
         await db.updateGenerationJob(job.id, {
           status: "ready",
@@ -842,16 +943,16 @@ export const tourRouter = router({
     }),
 
   /** All of the user's jobs, newest first (history view). */
-  listJobs: protectedProcedure.query(async ({ ctx }) => {
+  listJobs: appProcedure.query(async ({ ctx }) => {
     const [jobs, subscribed] = await Promise.all([
       db.listGenerationJobs(ctx.user.id),
       db.hasActiveSubscription(ctx.user.id),
     ]);
-    return Promise.all(jobs.map((job) => toClientJobWithMedia(job, subscribed)));
+    return Promise.all(jobs.map(job => toClientJobWithMedia(job, subscribed)));
   }),
 
   /** Signed download URL for a ready video — subscription required. */
-  getDownloadUrl: protectedProcedure
+  getDownloadUrl: appProcedure
     .input(z.object({ jobId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const subscribed = await db.hasActiveSubscription(ctx.user.id);
