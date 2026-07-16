@@ -42,8 +42,8 @@ export default function ChangePassword() {
   };
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-16">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(247,184,208,.28),transparent_42%)]" />
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-16">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(24,24,27,.08),transparent_42%)]" />
       <form
         onSubmit={submit}
         className="relative w-full max-w-md rounded-3xl border border-zinc-200 bg-white/90 p-7 shadow-2xl shadow-zinc-950/10 backdrop-blur-xl sm:p-9"

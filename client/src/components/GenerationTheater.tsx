@@ -178,7 +178,7 @@ export default function GenerationTheater({
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center">
               <span className="relative flex h-16 w-16 items-center justify-center">
                 <span className="absolute inset-0 animate-ping rounded-full bg-primary/25" />
-                <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-primary/90 text-primary-foreground pink-glow">
+                <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-primary/90 text-primary-foreground focus-glow">
                   {(() => {
                     const Icon = STAGES[stageIndex].icon;
                     return <Icon className="h-6 w-6" />;
@@ -233,7 +233,7 @@ export default function GenerationTheater({
             ) : (
               <div className="h-full w-full animate-shimmer" />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#3A2E33]/60 via-transparent to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-zinc-950/70 via-transparent to-transparent" />
 
             {/* Fake player chrome under the blur */}
             <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-4">

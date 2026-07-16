@@ -112,7 +112,7 @@ function HeroPreview() {
           {/* Top overlay: live recording badge */}
           <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
             <span className="flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-              <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+              <span className="h-1.5 w-1.5 rounded-full bg-zinc-100" />
               AI Tour Preview
             </span>
             <span className="flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
@@ -143,7 +143,7 @@ function HeroPreview() {
             </div>
             {/* Scrub track */}
             <div className="relative h-1 w-full overflow-hidden rounded-full bg-white/25">
-              <div className="animate-scrub absolute inset-y-0 w-2/5 rounded-full bg-gradient-to-r from-[#F7B8D0] to-[#E894B5]" />
+              <div className="animate-scrub absolute inset-y-0 w-2/5 rounded-full bg-white" />
             </div>
           </div>
         </div>
@@ -298,13 +298,13 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen overflow-x-hidden">
+    <div className="min-h-screen overflow-x-hidden bg-background text-foreground">
       {/* ===== Nav ===== */}
       <header
         className={cn(
           "fixed inset-x-0 top-0 z-50 transition-all duration-300",
           scrolled
-            ? "border-b border-primary/10 bg-background/80 shadow-[0_8px_30px_rgba(232,148,181,0.12)] backdrop-blur-xl"
+            ? "border-b border-zinc-200/80 bg-white/85 shadow-[0_12px_35px_rgba(24,24,27,0.08)] backdrop-blur-xl"
             : "border-b border-transparent bg-transparent"
         )}
       >
@@ -336,7 +336,7 @@ export default function Home() {
               <button
                 key={item.id}
                 onClick={() => scrollToSection(item.id)}
-                className="rounded-full px-3.5 py-2 text-sm font-medium text-foreground/70 transition-colors hover:bg-accent/70 hover:text-primary"
+                className="rounded-full px-3.5 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950"
               >
                 {item.label}
               </button>
@@ -388,7 +388,7 @@ export default function Home() {
 
         {/* Mobile dropdown menu */}
         {mobileMenuOpen && (
-          <div className="glass-panel mx-3 mb-2 rounded-2xl border border-primary/10 p-2 md:hidden">
+          <div className="glass-panel mx-3 mb-2 rounded-2xl border border-zinc-200 p-2 md:hidden">
             {[
               { label: "Home", id: "top" },
               { label: "AI Real Estate", id: "features" },
@@ -398,7 +398,7 @@ export default function Home() {
               <button
                 key={item.id}
                 onClick={() => scrollToSection(item.id)}
-                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-foreground/80 transition-colors hover:bg-accent/70 hover:text-primary"
+                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-950"
               >
                 {item.label}
               </button>
@@ -409,7 +409,7 @@ export default function Home() {
                   setMobileMenuOpen(false);
                   navigate("/login");
                 }}
-                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium text-primary transition-colors hover:bg-accent/70"
+                className="block w-full rounded-xl px-4 py-2.5 text-left text-sm font-semibold text-zinc-950 transition-colors hover:bg-zinc-100"
               >
                 Log in
               </button>
@@ -422,7 +422,7 @@ export default function Home() {
       <section
         ref={heroRef}
         onMouseMove={onHeroMouseMove}
-        className="relative flex min-h-screen items-center pt-24 pb-16"
+        className="relative flex min-h-screen items-center bg-[#f7f7f8] pt-24 pb-16"
       >
         {/* Drifting gradient blobs */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -430,7 +430,7 @@ export default function Home() {
             className="animate-blob-1 absolute -left-32 -top-24 h-[34rem] w-[34rem] rounded-full opacity-60 blur-3xl"
             style={{
               background:
-                "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
+                "radial-gradient(circle, rgba(255,255,255,.96) 0%, rgba(212,212,216,.55) 60%, transparent 75%)",
               translate: `${parallax.x * -18}px ${parallax.y * -18}px`,
             }}
           />
@@ -438,7 +438,7 @@ export default function Home() {
             className="animate-blob-2 absolute right-[-10rem] top-[15%] h-[30rem] w-[30rem] rounded-full opacity-50 blur-3xl"
             style={{
               background:
-                "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
+                "radial-gradient(circle, rgba(161,161,170,.55) 0%, rgba(228,228,231,.48) 55%, transparent 75%)",
               translate: `${parallax.x * -26}px ${parallax.y * -26}px`,
             }}
           />
@@ -446,7 +446,7 @@ export default function Home() {
             className="animate-blob-3 absolute bottom-[-8rem] left-[30%] h-[26rem] w-[26rem] rounded-full opacity-40 blur-3xl"
             style={{
               background:
-                "radial-gradient(circle, #F5C5DE 0%, #D9C4F2 60%, transparent 78%)",
+                "radial-gradient(circle, rgba(244,244,245,.9) 0%, rgba(161,161,170,.35) 60%, transparent 78%)",
               translate: `${parallax.x * -12}px ${parallax.y * -12}px`,
             }}
           />
@@ -464,7 +464,7 @@ export default function Home() {
             <h1 className="animate-fade-up-delay-1 mt-5 font-display text-4xl leading-[1.08] text-foreground sm:text-5xl lg:text-[3.6rem]">
               Photos in.
               <br />A{" "}
-              <span className="animate-text-sheen bg-gradient-to-r from-[#E894B5] via-[#c98ad6] to-[#E894B5] bg-clip-text text-transparent">
+              <span className="animate-text-sheen bg-gradient-to-r from-zinc-950 via-zinc-500 to-zinc-950 bg-clip-text text-transparent">
                 cinematic tour
               </span>{" "}
               out.
@@ -502,7 +502,7 @@ export default function Home() {
             <div className="animate-fade-up-delay-3 mt-9 flex flex-wrap items-center gap-x-6 gap-y-3">
               <div className="flex items-center gap-2">
                 <div className="flex -space-x-2">
-                  {["#E894B5", "#c98ad6", "#F7B8D0", "#D9C4F2"].map((c, i) => (
+                  {["#18181b", "#3f3f46", "#71717a", "#a1a1aa"].map((c, i) => (
                     <span
                       key={i}
                       className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold text-white"
@@ -562,7 +562,7 @@ export default function Home() {
           </div>
           <div className="reveal-on-scroll mx-auto mt-10 max-w-4xl">
             <div className="rounded-[2rem] border border-zinc-200 bg-white/90 p-3 shadow-[0_30px_100px_-45px_rgba(24,24,27,.45)] sm:p-5">
-              <div className="rounded-[1.5rem] border border-primary/15 bg-[#fffafb] p-5 sm:p-8">
+              <div className="rounded-[1.5rem] border border-zinc-200 bg-white p-5 sm:p-8">
                 <TourTool
                   images={toolImages}
                   settings={settings}
@@ -807,7 +807,7 @@ export default function Home() {
         id="pricing"
         className="relative scroll-mt-24 overflow-hidden py-24"
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(247,184,208,.2),transparent_46%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(24,24,27,.08),transparent_46%)]" />
         <div className="container relative">
           <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
@@ -856,7 +856,7 @@ export default function Home() {
       <section className="relative py-24">
         <div className="container">
           <div className="reveal-on-scroll relative overflow-hidden rounded-[2.25rem] bg-zinc-950 px-6 py-14 text-center text-white shadow-[0_35px_100px_-45px_rgba(24,24,27,.8)] sm:px-12 sm:py-20">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(247,184,208,.28),transparent_32%),radial-gradient(circle_at_85%_90%,rgba(201,138,214,.2),transparent_34%)]" />
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(255,255,255,.14),transparent_32%),radial-gradient(circle_at_85%_90%,rgba(161,161,170,.18),transparent_34%)]" />
             <div className="relative mx-auto max-w-2xl">
               <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-medium text-white/70">
                 <Sparkles className="h-3.5 w-3.5" /> Your next listing can

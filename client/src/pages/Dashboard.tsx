@@ -708,7 +708,7 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="relative flex min-h-screen">
+    <div className="relative flex min-h-screen bg-background">
       {/* ===== Sidebar (persistent on desktop, drawer on mobile) ===== */}
       <DashboardSidebar
         isOpen={sidebarOpen}
@@ -725,7 +725,7 @@ export default function Dashboard() {
       {/* ===== Main column ===== */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/60 bg-background/80 px-3 backdrop-blur-xl lg:hidden">
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-200 bg-white/90 px-3 backdrop-blur-xl lg:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
             className="rounded-lg p-2 text-foreground hover:bg-muted"
@@ -815,7 +815,7 @@ export default function Dashboard() {
             <div className="grid gap-8 xl:grid-cols-[1fr_minmax(20rem,26rem)]">
               <section
                 id="tour-tool"
-                className="glass-panel rounded-3xl p-6 sm:p-8"
+                className="glass-panel rounded-3xl border-zinc-200 bg-white p-6 sm:p-8"
               >
                 <TourTool
                   images={toolImages}

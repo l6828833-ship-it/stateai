@@ -46,13 +46,13 @@ function StatusPill({
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-        active ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+        active ? "bg-zinc-950 text-white" : "bg-zinc-200 text-zinc-700"
       )}
     >
       <span
         className={cn(
           "h-1.5 w-1.5 rounded-full",
-          active ? "bg-emerald-500" : "bg-red-500"
+          active ? "bg-white" : "bg-zinc-500"
         )}
       />
       {children}
@@ -176,7 +176,7 @@ export default function Admin() {
 
   if (loading || (user?.role === "admin" && usersQuery.isLoading)) {
     return (
-      <div className="min-h-screen bg-[#f7f7f8] p-8">
+      <div className="min-h-screen bg-background p-8">
         <Skeleton className="h-[80vh] rounded-3xl" />
       </div>
     );
@@ -187,7 +187,7 @@ export default function Admin() {
   const selected = detailQuery.data;
 
   return (
-    <div className="flex min-h-screen bg-[#f7f7f8] text-zinc-950">
+    <div className="flex min-h-screen bg-background text-zinc-950">
       {sidebarOpen && (
         <button
           className="fixed inset-0 z-40 bg-zinc-950/30 backdrop-blur-sm lg:hidden"
@@ -305,7 +305,7 @@ export default function Admin() {
               </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-950 px-3 py-1 text-xs font-semibold text-white">
             <ShieldCheck className="h-3.5 w-3.5" /> Admin only
           </span>
         </header>
@@ -674,7 +674,7 @@ export default function Admin() {
                           {selected.role}
                         </span>
                         {selected.forcePasswordChange && (
-                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                          <span className="rounded-full bg-zinc-200 px-2.5 py-1 text-[11px] font-semibold text-zinc-700">
                             Password change required
                           </span>
                         )}
@@ -884,7 +884,7 @@ export default function Admin() {
                     </Button>
                   </div>
                   {selected.id === user.id && (
-                    <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                    <p className="rounded-xl border border-zinc-200 bg-zinc-100 p-3 text-xs leading-5 text-zinc-700">
                       Self-lockout protection is active. You cannot disable,
                       demote, reset, or revoke your own administrator account
                       here.

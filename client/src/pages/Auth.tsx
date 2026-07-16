@@ -194,21 +194,21 @@ export default function Auth({
   }, [mode, email]);
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-12">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-12">
       {/* Ambient blobs */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
           className="absolute -left-32 -top-24 h-[30rem] w-[30rem] rounded-full opacity-50 blur-3xl"
           style={{
             background:
-              "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
+              "radial-gradient(circle, rgba(255,255,255,.98) 0%, rgba(212,212,216,.65) 60%, transparent 75%)",
           }}
         />
         <div
           className="absolute -bottom-32 -right-24 h-[28rem] w-[28rem] rounded-full opacity-40 blur-3xl"
           style={{
             background:
-              "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
+              "radial-gradient(circle, rgba(161,161,170,.45) 0%, rgba(244,244,245,.8) 55%, transparent 75%)",
           }}
         />
       </div>
@@ -219,13 +219,13 @@ export default function Auth({
           onClick={() => navigate("/")}
           className="mx-auto mb-6 flex items-center gap-2 font-display text-lg text-foreground"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
             <Clapperboard className="h-4 w-4" />
           </span>
           EstateTour AI
         </button>
 
-        <div className="glass-panel rounded-3xl p-7 sm:p-9">
+        <div className="glass-panel rounded-3xl border-zinc-200 bg-white/92 p-7 shadow-[0_30px_90px_-45px_rgba(24,24,27,.55)] sm:p-9">
           {mode === "verify" && (
             <button
               onClick={() =>
@@ -315,7 +315,7 @@ export default function Auth({
               <Button
                 type="submit"
                 disabled={busy}
-                className="btn-springy w-full rounded-full py-6 text-base"
+                className="btn-springy w-full rounded-full bg-zinc-950 py-6 text-base text-white hover:bg-zinc-800"
               >
                 {busy ? (
                   <Loader2 className="h-5 w-5 animate-spin" />

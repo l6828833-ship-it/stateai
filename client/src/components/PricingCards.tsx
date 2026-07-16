@@ -73,7 +73,7 @@ export default function PricingCards({
   return (
     <div className={className}>
       <div className="relative mx-auto mb-7 flex max-w-3xl flex-col items-center justify-between gap-4 overflow-hidden rounded-2xl bg-zinc-950 px-5 py-4 text-white shadow-2xl shadow-zinc-950/20 sm:flex-row">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(247,184,208,.22),transparent_36%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(255,255,255,.14),transparent_36%)]" />
         <div className="relative flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-zinc-950">
             <Sparkles className="h-4 w-4" />
@@ -115,7 +115,7 @@ export default function PricingCards({
             >
               {value === "month" ? "Monthly" : "Yearly"}
               {value === "year" && (
-                <span className="absolute -right-5 -top-3 rounded-full bg-primary px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary-foreground">
+                <span className="absolute -right-5 -top-3 rounded-full bg-zinc-950 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
                   Save more
                 </span>
               )}
@@ -166,7 +166,7 @@ export default function PricingCards({
                   <span className="line-through">
                     ${Math.round(originalMonthlyEquivalent)}/mo
                   </span>
-                  <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold text-zinc-950">
                     -{PROMOTIONAL_DISCOUNT_PERCENT}%
                   </span>
                 </div>
