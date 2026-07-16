@@ -29,7 +29,7 @@ const TIER_CONFIG = {
   starter: {
     name: "Starter",
     tagline: "For standout individual listings",
-    monthlyPrice: 29,
+    monthlyPrice: 39,
     yearlyMonthlyPrice: 29,
     videos: 3,
     maxImages: 6,

@@ -34,7 +34,6 @@ import {
   History,
   Loader2,
   Menu,
-  PanelLeftOpen,
   Play,
   RefreshCw,
   Sparkles,
@@ -914,7 +913,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="relative flex min-h-screen max-w-full overflow-x-hidden bg-background">
+    <div className="relative flex min-h-screen max-w-full overflow-x-clip bg-background">
       {/* ===== Sidebar (persistent on desktop, drawer on mobile) ===== */}
       <DashboardSidebar
         isOpen={sidebarOpen}
@@ -970,28 +969,13 @@ export default function Dashboard() {
         <main className="min-w-0 max-w-full flex-1 overflow-x-hidden px-4 pb-28 pt-6 sm:px-6 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">
           {/* Section header */}
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-3">
-              {sidebarCollapsed && (
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="hidden shrink-0 rounded-xl lg:inline-flex"
-                  onClick={() => setSidebarCollapsed(false)}
-                  aria-label="Open sidebar"
-                  title="Open sidebar"
-                >
-                  <PanelLeftOpen className="h-4 w-4" />
-                </Button>
-              )}
-              <div className="min-w-0">
-                <h1 className="truncate font-display text-2xl text-foreground sm:text-3xl">
-                  {sectionTitle}
-                </h1>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {sectionSubtitle}
-                </p>
-              </div>
+            <div className="min-w-0">
+              <h1 className="truncate font-display text-2xl text-foreground sm:text-3xl">
+                {sectionTitle}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {sectionSubtitle}
+              </p>
             </div>
             {/* Desktop plan actions */}
             <div className="hidden items-center gap-2 lg:flex">

@@ -56,7 +56,7 @@ describe("billing plans", () => {
       "creator_yearly",
       "studio_yearly",
     ]);
-    expect(PLAN_BY_ID.starter_monthly.price).toBe(29);
+    expect(PLAN_BY_ID.starter_monthly.price).toBe(39);
     expect(PLAN_BY_ID.starter_monthly.interval).toBe("month");
     expect(PLAN_BY_ID.starter_monthly.videoAllowance).toBe(
       "3 videos per month"
@@ -112,7 +112,27 @@ describe("stripe connectivity", () => {
 });
 
 describe("exact Stripe price classification", () => {
-  it("honors archived exact current and v3 contract prices", () => {
+  it("honors exact current, archived v4, and v3 contract prices", () => {
+    expect(
+      classifyGenerationPrice(
+        recurringPrice({
+          lookupKey: "estatetour_starter_monthly_v5",
+          amount: 3900,
+          interval: "month",
+        })
+      )
+    ).toEqual(
+      expect.objectContaining({
+        storedPlanId: "starter_monthly",
+        planId: "starter_monthly",
+        enforceAllowance: true,
+        includedVideos: 3,
+        maxImages: 6,
+        maxDurationSeconds: 15,
+        additionalVideoPriceUsd: 17,
+      })
+    );
+
     const v4Contracts = [
       ["starter_monthly", 2900, "month", 3, 6, 15, 17],
       ["starter_yearly", 34800, "year", 36, 6, 15, 17],
