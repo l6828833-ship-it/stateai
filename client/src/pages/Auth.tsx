@@ -4,7 +4,11 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+import {
+  InputOTP,
+  InputOTPGroup,
+  InputOTPSlot,
+} from "@/components/ui/input-otp";
 import {
   ArrowLeft,
   Clapperboard,
@@ -44,14 +48,19 @@ function GoogleIcon() {
 }
 
 const AUTH_ERROR_MESSAGES: Record<string, string> = {
-  google_not_configured: "Google sign-in isn't configured yet. Please use email instead.",
+  google_not_configured:
+    "Google sign-in isn't configured yet. Please use email instead.",
   google_state: "Google sign-in expired or was interrupted. Please try again.",
   google_token: "Couldn't complete Google sign-in. Please try again.",
   google_userinfo: "Couldn't read your Google profile. Please try again.",
   google: "Google sign-in failed. Please try again.",
 };
 
-export default function Auth({ initialMode = "signin" }: { initialMode?: Mode }) {
+export default function Auth({
+  initialMode = "signin",
+}: {
+  initialMode?: Mode;
+}) {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
 
@@ -73,7 +82,9 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
     const params = new URLSearchParams(window.location.search);
     const err = params.get("error");
     if (err) {
-      toast.error(AUTH_ERROR_MESSAGES[err] ?? "Sign-in failed. Please try again.");
+      toast.error(
+        AUTH_ERROR_MESSAGES[err] ?? "Sign-in failed. Please try again."
+      );
       // Clean the URL so the toast doesn't reappear on refresh.
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -82,28 +93,31 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
   // Resend cooldown ticker.
   useEffect(() => {
     if (cooldown <= 0) return;
-    const t = setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    const t = setInterval(() => setCooldown(c => Math.max(0, c - 1)), 1000);
     return () => clearInterval(t);
   }, [cooldown]);
 
   const finishAuthed = async () => {
     await utils.auth.me.invalidate();
-    navigate("/dashboard");
+    const currentUser = await utils.auth.me.fetch();
+    navigate(
+      currentUser?.mustChangePassword ? "/change-password" : "/dashboard"
+    );
   };
 
   const signupMutation = trpc.auth.signup.useMutation({
-    onSuccess: (res) => {
+    onSuccess: res => {
       setPurpose("signup");
       setCode("");
       setMode("verify");
       setCooldown(30);
       toast.success(`We sent a 6-digit code to ${res.email}`);
     },
-    onError: (e) => setError(e.message),
+    onError: e => setError(e.message),
   });
 
   const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: async (res) => {
+    onSuccess: async res => {
       if (res.needsVerification) {
         setPurpose("login");
         setCode("");
@@ -115,7 +129,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
       toast.success("Welcome back!");
       await finishAuthed();
     },
-    onError: (e) => setError(e.message),
+    onError: e => setError(e.message),
   });
 
   const verifyMutation = trpc.auth.verifyOtp.useMutation({
@@ -123,7 +137,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
       toast.success("Email verified — you're in!");
       await finishAuthed();
     },
-    onError: (e) => setError(e.message),
+    onError: e => setError(e.message),
   });
 
   const resendMutation = trpc.auth.resendOtp.useMutation({
@@ -131,7 +145,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
       setCooldown(30);
       toast.success("A new code is on its way.");
     },
-    onError: (e) => {
+    onError: e => {
       setError(e.message);
       setCooldown(30);
     },
@@ -161,9 +175,20 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
   }, [code]);
 
   const heading = useMemo(() => {
-    if (mode === "signup") return { title: "Create your account", sub: "Start turning listing photos into cinematic tours." };
-    if (mode === "signin") return { title: "Welcome back", sub: "Sign in to your EstateTour AI studio." };
-    return { title: "Verify your email", sub: `Enter the 6-digit code we sent to ${email}.` };
+    if (mode === "signup")
+      return {
+        title: "Create your account",
+        sub: "Start turning listing photos into cinematic tours.",
+      };
+    if (mode === "signin")
+      return {
+        title: "Welcome back",
+        sub: "Sign in to your EstateTour AI studio.",
+      };
+    return {
+      title: "Verify your email",
+      sub: `Enter the 6-digit code we sent to ${email}.`,
+    };
   }, [mode, email]);
 
   return (
@@ -172,11 +197,17 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
           className="absolute -left-32 -top-24 h-[30rem] w-[30rem] rounded-full opacity-50 blur-3xl"
-          style={{ background: "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)" }}
+          style={{
+            background:
+              "radial-gradient(circle, #F7B8D0 0%, #E6C8F0 60%, transparent 75%)",
+          }}
         />
         <div
           className="absolute -bottom-32 -right-24 h-[28rem] w-[28rem] rounded-full opacity-40 blur-3xl"
-          style={{ background: "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)" }}
+          style={{
+            background:
+              "radial-gradient(circle, #E894B5 0%, #F0C9DC 55%, transparent 75%)",
+          }}
         />
       </div>
 
@@ -195,14 +226,18 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
         <div className="glass-panel rounded-3xl p-7 sm:p-9">
           {mode === "verify" && (
             <button
-              onClick={() => setMode(purpose === "signup" ? "signup" : "signin")}
+              onClick={() =>
+                setMode(purpose === "signup" ? "signup" : "signin")
+              }
               className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-primary"
             >
               <ArrowLeft className="h-4 w-4" /> Back
             </button>
           )}
 
-          <h1 className="font-display text-2xl text-foreground">{heading.title}</h1>
+          <h1 className="font-display text-2xl text-foreground">
+            {heading.title}
+          </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">{heading.sub}</p>
 
           {error && (
@@ -220,7 +255,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
                   <Input
                     id="name"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={e => setName(e.target.value)}
                     placeholder="Jordan Rivera"
                     autoComplete="name"
                     required
@@ -233,7 +268,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
                   id="email"
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={e => setEmail(e.target.value)}
                   placeholder="you@agency.com"
                   autoComplete="email"
                   required
@@ -246,19 +281,31 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
                     id="password"
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={mode === "signup" ? "At least 8 characters" : "Your password"}
-                    autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder={
+                      mode === "signup"
+                        ? "At least 8 characters"
+                        : "Your password"
+                    }
+                    autoComplete={
+                      mode === "signup" ? "new-password" : "current-password"
+                    }
                     required
                     className="pr-10"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword((s) => !s)}
+                    onClick={() => setShowPassword(s => !s)}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-label={
+                      showPassword ? "Hide password" : "Show password"
+                    }
                   >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -296,7 +343,7 @@ export default function Auth({ initialMode = "signin" }: { initialMode?: Mode })
                   containerClassName="gap-2"
                 >
                   <InputOTPGroup className="gap-2">
-                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                    {[0, 1, 2, 3, 4, 5].map(i => (
                       <InputOTPSlot
                         key={i}
                         index={i}

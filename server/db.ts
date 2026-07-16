@@ -1,4 +1,15 @@
-import { and, count, desc, eq, gt, gte, isNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -6,15 +17,17 @@ import {
   InsertGenerationJob,
   InsertProjectImage,
   InsertUser,
+  adminAuditLogs,
   authCodes,
   generationJobs,
   projectImages,
   projects,
   subscriptions,
+  usageAdjustments,
   users,
 } from "../drizzle/schema";
-import { ENV } from './_core/env';
-import { PLAN_BY_ID, type PlanId } from "../shared/plans";
+import { ENV } from "./_core/env";
+import type { PlanId } from "../shared/plans";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -73,8 +86,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -85,13 +98,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    await db
-      .insert(users)
-      .values(values)
-      .onConflictDoUpdate({
-        target: users.openId,
-        set: updateSet,
-      });
+    await db.insert(users).values(values).onConflictDoUpdate({
+      target: users.openId,
+      set: updateSet,
+    });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -105,7 +115,11 @@ export async function getUserByOpenId(openId: string) {
     return undefined;
   }
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }
@@ -116,7 +130,11 @@ export async function getUserByOpenId(openId: string) {
 export async function getUserByEmail(email: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const rows = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
   return rows[0];
 }
 
@@ -151,7 +169,10 @@ export async function setUserPassword(userId: number, passwordHash: string) {
 export async function markEmailVerified(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(users).set({ emailVerified: new Date() }).where(eq(users.id, userId));
+  await db
+    .update(users)
+    .set({ emailVerified: new Date() })
+    .where(eq(users.id, userId));
 }
 
 // ===================== One-time codes (OTP) =====================
@@ -169,7 +190,7 @@ export async function createAuthCode(input: InsertAuthCode) {
  */
 export async function getActiveAuthCode(
   email: string,
-  purpose: "signup" | "login" | "reset",
+  purpose: "signup" | "login" | "reset"
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -181,8 +202,8 @@ export async function getActiveAuthCode(
         eq(authCodes.email, email),
         eq(authCodes.purpose, purpose),
         isNull(authCodes.consumedAt),
-        gt(authCodes.expiresAt, new Date()),
-      ),
+        gt(authCodes.expiresAt, new Date())
+      )
     )
     .orderBy(desc(authCodes.createdAt))
     .limit(1);
@@ -193,7 +214,11 @@ export async function getActiveAuthCode(
 export async function incrementAuthCodeAttempts(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const rows = await db.select().from(authCodes).where(eq(authCodes.id, id)).limit(1);
+  const rows = await db
+    .select()
+    .from(authCodes)
+    .where(eq(authCodes.id, id))
+    .limit(1);
   const current = rows[0];
   if (!current) return;
   await db
@@ -206,13 +231,16 @@ export async function incrementAuthCodeAttempts(id: number) {
 export async function consumeAuthCode(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(authCodes).set({ consumedAt: new Date() }).where(eq(authCodes.id, id));
+  await db
+    .update(authCodes)
+    .set({ consumedAt: new Date() })
+    .where(eq(authCodes.id, id));
 }
 
 /** Invalidate any outstanding codes for an email+purpose (e.g. before issuing a new one). */
 export async function invalidateAuthCodes(
   email: string,
-  purpose: "signup" | "login" | "reset",
+  purpose: "signup" | "login" | "reset"
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -223,8 +251,8 @@ export async function invalidateAuthCodes(
       and(
         eq(authCodes.email, email),
         eq(authCodes.purpose, purpose),
-        isNull(authCodes.consumedAt),
-      ),
+        isNull(authCodes.consumedAt)
+      )
     );
 }
 
@@ -268,7 +296,7 @@ export async function updateProjectSettings(
     resolution: string;
     aspectRatio: string;
     clipDuration: number;
-  }>,
+  }>
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -294,13 +322,23 @@ export async function getProjectImages(projectId: number, userId: number) {
   return db
     .select()
     .from(projectImages)
-    .where(and(eq(projectImages.projectId, projectId), eq(projectImages.userId, userId)))
+    .where(
+      and(
+        eq(projectImages.projectId, projectId),
+        eq(projectImages.userId, userId)
+      )
+    )
     .orderBy(projectImages.sequenceIndex);
 }
 
-export async function getMaxSequenceIndex(projectId: number, userId: number): Promise<number> {
+export async function getMaxSequenceIndex(
+  projectId: number,
+  userId: number
+): Promise<number> {
   const images = await getProjectImages(projectId, userId);
-  return images.length === 0 ? -1 : Math.max(...images.map((i) => i.sequenceIndex));
+  return images.length === 0
+    ? -1
+    : Math.max(...images.map(i => i.sequenceIndex));
 }
 
 /**
@@ -312,21 +350,23 @@ export async function getMaxSequenceIndex(projectId: number, userId: number): Pr
 export async function reorderProjectImages(
   projectId: number,
   userId: number,
-  orderedImageIds: number[],
+  orderedImageIds: number[]
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   const current = await getProjectImages(projectId, userId);
-  const currentIds = new Set(current.map((i) => i.id));
+  const currentIds = new Set(current.map(i => i.id));
   const incoming = new Set(orderedImageIds);
 
   if (
     currentIds.size !== incoming.size ||
     orderedImageIds.length !== incoming.size ||
-    Array.from(currentIds).some((id) => !incoming.has(id))
+    Array.from(currentIds).some(id => !incoming.has(id))
   ) {
-    throw new Error("Reorder rejected: image id set does not match the project's images");
+    throw new Error(
+      "Reorder rejected: image id set does not match the project's images"
+    );
   }
 
   // Two-phase update to avoid transient duplicate sequenceIndex values.
@@ -334,13 +374,23 @@ export async function reorderProjectImages(
     await db
       .update(projectImages)
       .set({ sequenceIndex: i + 10000 })
-      .where(and(eq(projectImages.id, orderedImageIds[i]), eq(projectImages.userId, userId)));
+      .where(
+        and(
+          eq(projectImages.id, orderedImageIds[i]),
+          eq(projectImages.userId, userId)
+        )
+      );
   }
   for (let i = 0; i < orderedImageIds.length; i++) {
     await db
       .update(projectImages)
       .set({ sequenceIndex: i })
-      .where(and(eq(projectImages.id, orderedImageIds[i]), eq(projectImages.userId, userId)));
+      .where(
+        and(
+          eq(projectImages.id, orderedImageIds[i]),
+          eq(projectImages.userId, userId)
+        )
+      );
   }
 }
 
@@ -358,7 +408,9 @@ export async function deleteProjectImage(imageId: number, userId: number) {
 
   await db
     .delete(projectImages)
-    .where(and(eq(projectImages.id, imageId), eq(projectImages.userId, userId)));
+    .where(
+      and(eq(projectImages.id, imageId), eq(projectImages.userId, userId))
+    );
 
   // Re-compact sequence indexes so order stays gapless. Issue the updates
   // concurrently (pipelined over one connection) instead of awaiting each in
@@ -372,18 +424,24 @@ export async function deleteProjectImage(imageId: number, userId: number) {
         db
           .update(projectImages)
           .set({ sequenceIndex: i })
-          .where(eq(projectImages.id, img.id)),
-      ),
+          .where(eq(projectImages.id, img.id))
+      )
   );
 }
 
-export async function updateImageRoomTag(imageId: number, userId: number, roomTag: string) {
+export async function updateImageRoomTag(
+  imageId: number,
+  userId: number,
+  roomTag: string
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db
     .update(projectImages)
     .set({ roomTag })
-    .where(and(eq(projectImages.id, imageId), eq(projectImages.userId, userId)));
+    .where(
+      and(eq(projectImages.id, imageId), eq(projectImages.userId, userId))
+    );
 }
 
 // ===================== Generation Jobs =====================
@@ -396,10 +454,7 @@ type GenerationReservation =
     }
   | {
       ok: false;
-      reason:
-        | "inactive"
-        | "limit_reached"
-        | "period_unavailable";
+      reason: "inactive" | "limit_reached" | "period_unavailable";
       allowance?: number;
       used?: number;
     };
@@ -415,15 +470,15 @@ export async function reserveGenerationJob(
   imageIds: number[],
   additionalCheckoutSessionId?: string,
   billingEntitlement?: {
-    periodStart: Date;
+    usageWindowStart: Date;
     enforceAllowance: boolean;
-    planId?: PlanId;
-  },
+    allowance?: number;
+  }
 ): Promise<GenerationReservation> {
   const database = await getDb();
   if (!database) throw new Error("Database not available");
 
-  return database.transaction(async (tx) => {
+  return database.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(${job.userId})`);
 
     const [subscription] = await tx
@@ -433,9 +488,11 @@ export async function reserveGenerationJob(
       .limit(1);
     const active =
       subscription &&
-      (subscription.status === "active" || subscription.status === "trialing") &&
+      (subscription.status === "active" ||
+        subscription.status === "trialing") &&
       (!subscription.currentPeriodEnd ||
-        subscription.currentPeriodEnd.getTime() >= Date.now() - 24 * 3600 * 1000);
+        subscription.currentPeriodEnd.getTime() >=
+          Date.now() - 24 * 3600 * 1000);
     if (!active) return { ok: false, reason: "inactive" } as const;
     // The Stripe subscription and exact recurring price must be recognized for
     // every generation path. Never infer entitlement from the denormalized DB plan.
@@ -450,8 +507,8 @@ export async function reserveGenerationJob(
         .where(
           and(
             eq(generationJobs.userId, job.userId),
-            sql`${generationJobs.imageSequence}::jsonb ->> 'additionalCheckoutSessionId' = ${additionalCheckoutSessionId}`,
-          ),
+            sql`${generationJobs.imageSequence}::jsonb ->> 'additionalCheckoutSessionId' = ${additionalCheckoutSessionId}`
+          )
         )
         .limit(1);
 
@@ -475,29 +532,51 @@ export async function reserveGenerationJob(
       return { ok: true, job: created, shouldSubmit: true } as const;
     }
 
-    // Current v2 prices enforce the new limit using the plan classified from
-    // Stripe itself. Exact known v1 prices retain their previously sold access.
+    // Exact current v3 prices enforce a monthly usage window, including annual
+    // subscriptions. Exact v2 prices retain their sold billing-period limits;
+    // exact known v1 prices retain their original unlimited behavior.
     if (billingEntitlement.enforceAllowance) {
-      const entitlementPlanId = billingEntitlement.planId;
-      if (!entitlementPlanId) {
+      const allowance = billingEntitlement.allowance;
+      if (!allowance || allowance < 1) {
         return { ok: false, reason: "period_unavailable" } as const;
       }
-      const [usage] = await tx
-        .select({ value: count() })
-        .from(generationJobs)
-        .where(
-          and(
-            eq(generationJobs.userId, job.userId),
-            gte(generationJobs.createdAt, billingEntitlement.periodStart),
-            sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
-            or(
-              eq(generationJobs.status, "processing"),
-              eq(generationJobs.status, "ready"),
-            ),
+      const [[usage], [adjustment]] = await Promise.all([
+        tx
+          .select({ value: count() })
+          .from(generationJobs)
+          .where(
+            and(
+              eq(generationJobs.userId, job.userId),
+              gte(
+                generationJobs.createdAt,
+                billingEntitlement.usageWindowStart
+              ),
+              sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+              or(
+                eq(generationJobs.status, "processing"),
+                eq(generationJobs.status, "ready")
+              )
+            )
           ),
-        );
-      const used = Number(usage?.value ?? 0);
-      const allowance = PLAN_BY_ID[entitlementPlanId].includedVideos;
+        tx
+          .select({
+            value: sql<number>`coalesce(sum(${usageAdjustments.delta}), 0)`,
+          })
+          .from(usageAdjustments)
+          .where(
+            and(
+              eq(usageAdjustments.userId, job.userId),
+              gte(
+                usageAdjustments.createdAt,
+                billingEntitlement.usageWindowStart
+              )
+            )
+          ),
+      ]);
+      const used = Math.max(
+        0,
+        Number(usage?.value ?? 0) + Number(adjustment?.value ?? 0)
+      );
       if (used >= allowance) {
         return { ok: false, reason: "limit_reached", allowance, used } as const;
       }
@@ -543,11 +622,14 @@ export async function updateGenerationJob(
     videoUrl: string;
     thumbnailUrl: string;
     errorMessage: string;
-  }>,
+  }>
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(generationJobs).set(patch).where(eq(generationJobs.id, jobId));
+  await db
+    .update(generationJobs)
+    .set(patch)
+    .where(eq(generationJobs.id, jobId));
 }
 
 /** Jobs still processing and available for provider reconciliation/polling. */
@@ -557,7 +639,12 @@ export async function listProcessingJobs(userId: number) {
   return db
     .select()
     .from(generationJobs)
-    .where(and(eq(generationJobs.userId, userId), eq(generationJobs.status, "processing")));
+    .where(
+      and(
+        eq(generationJobs.userId, userId),
+        eq(generationJobs.status, "processing")
+      )
+    );
 }
 
 // ===================== Subscriptions =====================
@@ -578,16 +665,19 @@ export async function upsertSubscription(
   patch: Partial<{
     stripeCustomerId: string;
     stripeSubscriptionId: string;
-    plan: "starter" | "pro" | "annual" | "business" | null;
+    plan: PlanId | "starter" | "pro" | "annual" | "business" | null;
     status: string;
     currentPeriodEnd: Date;
-  }>,
+  }>
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const existing = await getSubscription(userId);
   if (existing) {
-    await db.update(subscriptions).set(patch).where(eq(subscriptions.userId, userId));
+    await db
+      .update(subscriptions)
+      .set(patch)
+      .where(eq(subscriptions.userId, userId));
   } else {
     await db.insert(subscriptions).values({ userId, ...patch });
   }
@@ -610,7 +700,10 @@ export async function hasActiveSubscription(userId: number): Promise<boolean> {
   const sub = await getSubscription(userId);
   if (!sub) return false;
   if (sub.status !== "active" && sub.status !== "trialing") return false;
-  if (sub.currentPeriodEnd && sub.currentPeriodEnd.getTime() < Date.now() - 24 * 3600 * 1000) {
+  if (
+    sub.currentPeriodEnd &&
+    sub.currentPeriodEnd.getTime() < Date.now() - 24 * 3600 * 1000
+  ) {
     return false;
   }
   return true;
@@ -619,6 +712,381 @@ export async function hasActiveSubscription(userId: number): Promise<boolean> {
 export async function getUserById(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const rows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const rows = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
   return rows[0];
+}
+
+// ===================== Account/session security & administration =====================
+
+export async function changeOwnPassword(userId: number, passwordHash: string) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  const [updated] = await database
+    .update(users)
+    .set({
+      passwordHash,
+      mustChangePassword: false,
+      sessionVersion: sql`${users.sessionVersion} + 1`,
+    })
+    .where(and(eq(users.id, userId), eq(users.accountStatus, "active")))
+    .returning();
+  return updated;
+}
+
+export async function listUsersForAdmin(input: {
+  page: number;
+  pageSize: number;
+  search?: string;
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  const search = input.search?.trim();
+  const where = search
+    ? or(
+        ilike(users.email, `%${search}%`),
+        ilike(users.name, `%${search}%`),
+        ilike(users.openId, `%${search}%`)
+      )
+    : undefined;
+  const [rows, totals] = await Promise.all([
+    database
+      .select({
+        id: users.id,
+        openId: users.openId,
+        name: users.name,
+        email: users.email,
+        loginMethod: users.loginMethod,
+        emailVerified: users.emailVerified,
+        role: users.role,
+        accountStatus: users.accountStatus,
+        mustChangePassword: users.mustChangePassword,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+        lastSignedIn: users.lastSignedIn,
+        subscriptionPlan: subscriptions.plan,
+        subscriptionStatus: subscriptions.status,
+      })
+      .from(users)
+      .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
+      .where(where)
+      .orderBy(desc(users.createdAt))
+      .limit(input.pageSize)
+      .offset((input.page - 1) * input.pageSize),
+    database.select({ value: count() }).from(users).where(where),
+  ]);
+  return { rows, total: Number(totals[0]?.value ?? 0) };
+}
+
+export async function getUserDetailsForAdmin(
+  userId: number,
+  usageWindowStart?: Date
+) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  const [user] = await database
+    .select({
+      id: users.id,
+      openId: users.openId,
+      name: users.name,
+      email: users.email,
+      loginMethod: users.loginMethod,
+      emailVerified: users.emailVerified,
+      role: users.role,
+      accountStatus: users.accountStatus,
+      sessionVersion: users.sessionVersion,
+      mustChangePassword: users.mustChangePassword,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+      lastSignedIn: users.lastSignedIn,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!user) return undefined;
+
+  const calendarMonthStart = new Date();
+  calendarMonthStart.setUTCDate(1);
+  calendarMonthStart.setUTCHours(0, 0, 0, 0);
+  const windowStart = usageWindowStart ?? calendarMonthStart;
+  const [
+    subscription,
+    totals,
+    windowUsage,
+    adjustment,
+    recentAdjustments,
+    recentAudits,
+  ] = await Promise.all([
+    getSubscription(userId),
+    database
+      .select({ total: count() })
+      .from(generationJobs)
+      .where(eq(generationJobs.userId, userId)),
+    database
+      .select({ value: count() })
+      .from(generationJobs)
+      .where(
+        and(
+          eq(generationJobs.userId, userId),
+          gte(generationJobs.createdAt, windowStart),
+          sql`not (coalesce(${generationJobs.imageSequence}, 'null')::jsonb ? 'additionalCheckoutSessionId')`,
+          or(
+            eq(generationJobs.status, "processing"),
+            eq(generationJobs.status, "ready")
+          )
+        )
+      ),
+    database
+      .select({
+        currentWindow: sql<number>`coalesce(sum(${usageAdjustments.delta}) filter (where ${usageAdjustments.createdAt} >= ${windowStart}), 0)`,
+      })
+      .from(usageAdjustments)
+      .where(eq(usageAdjustments.userId, userId)),
+    database
+      .select()
+      .from(usageAdjustments)
+      .where(eq(usageAdjustments.userId, userId))
+      .orderBy(desc(usageAdjustments.createdAt))
+      .limit(25),
+    database
+      .select()
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.targetUserId, userId))
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(25),
+  ]);
+  const adjustmentThisWindow = Number(adjustment[0]?.currentWindow ?? 0);
+  return {
+    user,
+    subscription: subscription ?? null,
+    usage: {
+      total: Number(totals[0]?.total ?? 0),
+      currentWindow: Math.max(
+        0,
+        Number(windowUsage[0]?.value ?? 0) + adjustmentThisWindow
+      ),
+      adjustmentCurrentWindow: adjustmentThisWindow,
+      windowStart,
+    },
+    recentAdjustments,
+    recentAudits,
+  };
+}
+
+async function lockAdminMutation(tx: any) {
+  await tx.execute(sql`select pg_advisory_xact_lock(714002)`);
+}
+
+async function assertMayRemoveActiveAdmin(
+  tx: any,
+  target: typeof users.$inferSelect
+) {
+  if (target.role !== "admin" || target.accountStatus !== "active") return;
+  const [remaining] = await tx
+    .select({ value: count() })
+    .from(users)
+    .where(and(eq(users.role, "admin"), eq(users.accountStatus, "active")));
+  if (Number(remaining?.value ?? 0) <= 1) {
+    throw new Error("LAST_ACTIVE_ADMIN");
+  }
+}
+
+async function insertAudit(
+  tx: any,
+  input: {
+    adminId: number;
+    targetUserId?: number;
+    action: string;
+    metadata?: unknown;
+  }
+) {
+  await tx.insert(adminAuditLogs).values({
+    adminId: input.adminId,
+    targetUserId: input.targetUserId,
+    action: input.action,
+    metadata: JSON.stringify(input.metadata ?? {}),
+  });
+}
+
+export async function setUserAccountStatusByAdmin(input: {
+  adminId: number;
+  targetUserId: number;
+  status: "active" | "disabled";
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  return database.transaction(async tx => {
+    await lockAdminMutation(tx);
+    const [target] = await tx
+      .select()
+      .from(users)
+      .where(eq(users.id, input.targetUserId))
+      .limit(1);
+    if (!target) throw new Error("USER_NOT_FOUND");
+    if (input.adminId === input.targetUserId && input.status === "disabled") {
+      throw new Error("SELF_DISABLE");
+    }
+    if (input.status === "disabled")
+      await assertMayRemoveActiveAdmin(tx, target);
+    const sessionPatch =
+      input.status === "disabled"
+        ? { sessionVersion: sql`${users.sessionVersion} + 1` }
+        : {};
+    const [updated] = await tx
+      .update(users)
+      .set({ accountStatus: input.status, ...sessionPatch })
+      .where(eq(users.id, input.targetUserId))
+      .returning();
+    await insertAudit(tx, {
+      adminId: input.adminId,
+      targetUserId: input.targetUserId,
+      action: "user.account_status_changed",
+      metadata: { from: target.accountStatus, to: input.status },
+    });
+    return updated;
+  });
+}
+
+export async function setUserRoleByAdmin(input: {
+  adminId: number;
+  targetUserId: number;
+  role: "user" | "admin";
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  return database.transaction(async tx => {
+    await lockAdminMutation(tx);
+    const [target] = await tx
+      .select()
+      .from(users)
+      .where(eq(users.id, input.targetUserId))
+      .limit(1);
+    if (!target) throw new Error("USER_NOT_FOUND");
+    if (input.adminId === input.targetUserId && input.role === "user") {
+      throw new Error("SELF_DEMOTION");
+    }
+    if (input.role === "user") await assertMayRemoveActiveAdmin(tx, target);
+    const [updated] = await tx
+      .update(users)
+      .set({
+        role: input.role,
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+      })
+      .where(eq(users.id, input.targetUserId))
+      .returning();
+    await insertAudit(tx, {
+      adminId: input.adminId,
+      targetUserId: input.targetUserId,
+      action: "user.role_changed",
+      metadata: { from: target.role, to: input.role },
+    });
+    return updated;
+  });
+}
+
+export async function revokeUserSessionsByAdmin(
+  adminId: number,
+  targetUserId: number
+) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  return database.transaction(async tx => {
+    const [updated] = await tx
+      .update(users)
+      .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
+      .where(eq(users.id, targetUserId))
+      .returning();
+    if (!updated) throw new Error("USER_NOT_FOUND");
+    await insertAudit(tx, {
+      adminId,
+      targetUserId,
+      action: "user.sessions_revoked",
+    });
+    return updated;
+  });
+}
+
+export async function issueTemporaryPasswordByAdmin(input: {
+  adminId: number;
+  targetUserId: number;
+  passwordHash: string;
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  return database.transaction(async tx => {
+    const [updated] = await tx
+      .update(users)
+      .set({
+        passwordHash: input.passwordHash,
+        mustChangePassword: true,
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+      })
+      .where(eq(users.id, input.targetUserId))
+      .returning();
+    if (!updated) throw new Error("USER_NOT_FOUND");
+    await insertAudit(tx, {
+      adminId: input.adminId,
+      targetUserId: input.targetUserId,
+      action: "user.temporary_password_issued",
+      metadata: { mustChangePassword: true },
+    });
+    return updated;
+  });
+}
+
+export async function createAdminAudit(input: {
+  adminId: number;
+  targetUserId?: number;
+  action: string;
+  metadata?: unknown;
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  await insertAudit(database, input);
+}
+
+/** Append an auditable usage correction for the user's current usage window. */
+export async function adjustUserUsageByAdmin(input: {
+  adminId: number;
+  targetUserId: number;
+  delta: number;
+  reason: string;
+}) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  if (!Number.isInteger(input.delta) || input.delta === 0) {
+    throw new Error("INVALID_USAGE_ADJUSTMENT");
+  }
+  return database.transaction(async tx => {
+    const [target] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, input.targetUserId))
+      .limit(1);
+    if (!target) throw new Error("USER_NOT_FOUND");
+
+    const [adjustment] = await tx
+      .insert(usageAdjustments)
+      .values({
+        adminId: input.adminId,
+        userId: input.targetUserId,
+        delta: input.delta,
+        reason: input.reason,
+      })
+      .returning();
+    await insertAudit(tx, {
+      adminId: input.adminId,
+      targetUserId: input.targetUserId,
+      action: "user.usage_adjusted",
+      metadata: {
+        adjustmentId: adjustment.id,
+        delta: input.delta,
+        reason: input.reason,
+      },
+    });
+    return adjustment;
+  });
 }

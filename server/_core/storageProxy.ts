@@ -37,6 +37,12 @@ export function registerStorageProxy(app: Express) {
         }
 
         const ownerId = Number(userObject[1]);
+        if (user.mustChangePassword) {
+          res
+            .status(403)
+            .send("Change your temporary password before continuing");
+          return;
+        }
         if (user.id !== ownerId) {
           // Avoid revealing whether another user's object exists.
           res.status(404).send("Media not found");

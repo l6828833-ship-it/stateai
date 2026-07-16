@@ -14,7 +14,7 @@ import {
 import { hashPassword, verifyPassword } from "../_core/password";
 import { sdk } from "../_core/sdk";
 import type { TrpcContext } from "../_core/context";
-import { publicProcedure, router } from "../_core/trpc";
+import { protectedProcedure, publicProcedure, router } from "../_core/trpc";
 
 const MAX_VERIFY_ATTEMPTS = 5;
 const RESEND_COOLDOWN_MS = 30_000;
@@ -38,6 +38,7 @@ async function establishSession(ctx: TrpcContext, user: User) {
   const token = await sdk.createSessionToken(user.openId, {
     // Must be non-empty: verifySession rejects sessions with a blank name.
     name: user.name || user.email || "User",
+    sessionVersion: user.sessionVersion,
     expiresInMs: ONE_YEAR_MS,
   });
   ctx.res.cookie(COOKIE_NAME, token, {
@@ -81,8 +82,8 @@ async function issueCode(email: string, purpose: "signup" | "login") {
 
 export const authRouter = router({
   /** Current user (sanitized — never exposes passwordHash). */
-  me: publicProcedure.query((opts) =>
-    opts.ctx.user ? sanitizeUser(opts.ctx.user) : null,
+  me: publicProcedure.query(opts =>
+    opts.ctx.user ? sanitizeUser(opts.ctx.user) : null
   ),
 
   logout: publicProcedure.mutation(({ ctx }) => {
@@ -102,7 +103,7 @@ export const authRouter = router({
         name: z.string().trim().min(1, "Name is required").max(120),
         email: emailSchema,
         password: passwordSchema,
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       const existing = await db.getUserByEmail(input.email);
@@ -110,7 +111,8 @@ export const authRouter = router({
       if (existing?.passwordHash && existing.emailVerified) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "An account with this email already exists. Please sign in instead.",
+          message:
+            "An account with this email already exists. Please sign in instead.",
         });
       }
 
@@ -147,10 +149,17 @@ export const authRouter = router({
           message: "Incorrect email or password.",
         });
       }
+      if (user.accountStatus !== "active") {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Unable to sign in to this account.",
+        });
+      }
       if (!user.passwordHash) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
-          message: "This email uses social sign-in. Continue with Manus instead.",
+          message:
+            "This email uses social sign-in. Continue with Manus instead.",
         });
       }
 
@@ -188,7 +197,7 @@ export const authRouter = router({
         email: emailSchema,
         code: codeSchema,
         purpose: purposeSchema,
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const record = await db.getActiveAuthCode(input.email, input.purpose);
@@ -214,8 +223,11 @@ export const authRouter = router({
       }
 
       const user = await db.getUserByEmail(input.email);
-      if (!user) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Account not found." });
+      if (!user || user.accountStatus !== "active") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Account not found.",
+        });
       }
 
       // Sign the session BEFORE consuming the code. If signing fails (e.g.
@@ -248,7 +260,10 @@ export const authRouter = router({
     .input(z.object({ email: emailSchema, purpose: purposeSchema }))
     .mutation(async ({ input }) => {
       const active = await db.getActiveAuthCode(input.email, input.purpose);
-      if (active && Date.now() - active.createdAt.getTime() < RESEND_COOLDOWN_MS) {
+      if (
+        active &&
+        Date.now() - active.createdAt.getTime() < RESEND_COOLDOWN_MS
+      ) {
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
           message: "Please wait a moment before requesting another code.",
@@ -256,5 +271,49 @@ export const authRouter = router({
       }
       await issueCode(input.email, input.purpose);
       return { ok: true, email: input.email } as const;
+    }),
+
+  /** Change the signed-in user's password and rotate every existing session. */
+  changePassword: protectedProcedure
+    .input(
+      z
+        .object({
+          currentPassword: z.string().min(1).max(200),
+          newPassword: passwordSchema.min(
+            12,
+            "New password must be at least 12 characters"
+          ),
+        })
+        .refine(input => input.newPassword !== input.currentPassword, {
+          path: ["newPassword"],
+          message: "Choose a password different from the temporary password",
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const current = await db.getUserById(ctx.user.id);
+      if (
+        !current ||
+        current.accountStatus !== "active" ||
+        !(await verifyPassword(input.currentPassword, current.passwordHash))
+      ) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "The current password is incorrect.",
+        });
+      }
+      const passwordHash = await hashPassword(input.newPassword);
+      const updated = await db.changeOwnPassword(current.id, passwordHash);
+      if (!updated) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The password could not be changed.",
+        });
+      }
+      await establishSession(ctx, updated);
+      return {
+        ok: true,
+        mustChangePassword: false,
+        user: sanitizeUser(updated),
+      } as const;
     }),
 });

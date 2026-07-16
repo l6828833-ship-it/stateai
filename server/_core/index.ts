@@ -41,9 +41,13 @@ async function startServer() {
   const server = createServer(app);
   // Stripe webhook needs the RAW body for signature verification —
   // it must be registered BEFORE express.json().
-  app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res) => {
-    void handleWebhook(req, res);
-  });
+  app.post(
+    "/api/stripe/webhook",
+    express.raw({ type: "application/json" }),
+    (req, res) => {
+      void handleWebhook(req, res);
+    }
+  );
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -55,7 +59,17 @@ async function startServer() {
         res.status(401).json({ error: "Please sign in first" });
         return;
       }
-      await handleCheckout(req, res, { id: user.id, email: user.email, name: user.name });
+      if (user.mustChangePassword) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
+        return;
+      }
+      await handleCheckout(req, res, {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      });
     } catch {
       res.status(401).json({ error: "Please sign in first" });
     }
@@ -65,6 +79,12 @@ async function startServer() {
       const user = await sdk.authenticateRequest(req);
       if (!user) {
         res.status(401).json({ error: "Please sign in first" });
+        return;
+      }
+      if (user.mustChangePassword) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
         return;
       }
       await handleAdditionalVideoCheckout(req, res, {
@@ -80,6 +100,12 @@ async function startServer() {
       const user = await sdk.authenticateRequest(req);
       if (!user) {
         res.status(401).json({ error: "Please sign in first" });
+        return;
+      }
+      if (user.mustChangePassword) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
         return;
       }
       await handlePortal(req, res, { id: user.id });
@@ -110,7 +136,9 @@ async function startServer() {
   // Only in development do we hunt for a free port to avoid local clashes.
   const envPort = parseInt(process.env.PORT || "3000");
   const port =
-    process.env.NODE_ENV === "production" ? envPort : await findAvailablePort(envPort);
+    process.env.NODE_ENV === "production"
+      ? envPort
+      : await findAvailablePort(envPort);
 
   // Bind on 0.0.0.0 so the container is reachable from the platform's router.
   server.listen(port, "0.0.0.0", () => {

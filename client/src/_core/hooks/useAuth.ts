@@ -70,6 +70,13 @@ export function useAuth(options?: UseAuthOptions) {
   ]);
 
   useEffect(() => {
+    if (!state.user?.mustChangePassword) return;
+    if (typeof window === "undefined") return;
+    if (window.location.pathname === "/change-password") return;
+    window.location.href = "/change-password";
+  }, [state.user]);
+
+  useEffect(() => {
     if (!redirectOnUnauthenticated) return;
     if (meQuery.isLoading || logoutMutation.isPending) return;
     if (state.user) return;

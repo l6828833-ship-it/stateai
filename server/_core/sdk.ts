@@ -1,4 +1,9 @@
-import { AXIOS_TIMEOUT_MS, COOKIE_NAME, ONE_YEAR_MS, decodeOAuthState } from "@shared/const";
+import {
+  AXIOS_TIMEOUT_MS,
+  COOKIE_NAME,
+  ONE_YEAR_MS,
+  decodeOAuthState,
+} from "@shared/const";
 import { ForbiddenError } from "@shared/_core/errors";
 import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
@@ -22,6 +27,7 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
+  sessionVersion?: number;
 };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
@@ -159,7 +165,7 @@ class SDKServer {
       // Without a signing secret, jose throws the cryptic "Zero-length key is
       // not supported". Fail with an actionable message instead.
       throw new Error(
-        "JWT_SECRET is not configured. Set the JWT_SECRET environment variable to a long random string (e.g. `openssl rand -hex 32`) so session tokens can be signed.",
+        "JWT_SECRET is not configured. Set the JWT_SECRET environment variable to a long random string (e.g. `openssl rand -hex 32`) so session tokens can be signed."
       );
     }
     return new TextEncoder().encode(secret);
@@ -172,13 +178,18 @@ class SDKServer {
    */
   async createSessionToken(
     openId: string,
-    options: { expiresInMs?: number; name?: string } = {}
+    options: {
+      expiresInMs?: number;
+      name?: string;
+      sessionVersion?: number;
+    } = {}
   ): Promise<string> {
     return this.signSession(
       {
         openId,
         appId: ENV.appId,
         name: options.name || "",
+        sessionVersion: options.sessionVersion,
       },
       options
     );
@@ -193,19 +204,26 @@ class SDKServer {
     const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1000);
     const secretKey = this.getSessionSecret();
 
-    return new SignJWT({
+    const sessionClaims = {
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
-    })
+      ...(payload.sessionVersion === undefined
+        ? {}
+        : { sessionVersion: payload.sessionVersion }),
+    };
+    return new SignJWT(sessionClaims)
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
   }
 
-  async verifySession(
-    cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  async verifySession(cookieValue: string | undefined | null): Promise<{
+    openId: string;
+    appId: string;
+    name: string;
+    sessionVersion?: number;
+  } | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -216,12 +234,17 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, sessionVersion } = payload as Record<
+        string,
+        unknown
+      >;
 
       if (
         !isNonEmptyString(openId) ||
         !isNonEmptyString(appId) ||
-        !isNonEmptyString(name)
+        !isNonEmptyString(name) ||
+        (sessionVersion !== undefined &&
+          (!Number.isInteger(sessionVersion) || (sessionVersion as number) < 0))
       ) {
         console.warn("[Auth] Session payload missing required fields");
         return null;
@@ -231,6 +254,9 @@ class SDKServer {
         openId,
         appId,
         name,
+        ...(sessionVersion === undefined
+          ? {}
+          : { sessionVersion: sessionVersion as number }),
       };
     } catch (error) {
       console.warn("[Auth] Session verification failed", String(error));
@@ -316,6 +342,17 @@ class SDKServer {
 
     if (!user) {
       throw ForbiddenError("User not found");
+    }
+    if (user.accountStatus !== "active") {
+      throw ForbiddenError("Account unavailable");
+    }
+    const tokenSessionVersion = session.sessionVersion;
+    const validSessionVersion =
+      tokenSessionVersion === undefined
+        ? user.sessionVersion === 0
+        : tokenSessionVersion === user.sessionVersion;
+    if (!validSessionVersion) {
+      throw ForbiddenError("Session revoked");
     }
 
     await db.upsertUser({

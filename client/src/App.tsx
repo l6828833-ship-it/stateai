@@ -7,6 +7,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
+import Admin from "./pages/Admin";
+import ChangePassword from "./pages/ChangePassword";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -20,6 +22,8 @@ function Router() {
         <Auth initialMode="signup" />
       </Route>
       <Route path={"/dashboard"} component={Dashboard} />
+      <Route path={"/admin"} component={Admin} />
+      <Route path={"/change-password"} component={ChangePassword} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
