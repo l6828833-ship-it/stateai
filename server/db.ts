@@ -695,6 +695,85 @@ export async function findSubscriptionByCustomerId(stripeCustomerId: string) {
   return rows[0];
 }
 
+const CHECKOUT_RESERVATION_TTL_MS = 40 * 60 * 1000;
+
+/**
+ * Serialize subscription checkout creation per user. This prevents overlapping
+ * requests from creating multiple completable Stripe Checkout Sessions before
+ * a webhook has stored the resulting subscription.
+ */
+export async function reserveSubscriptionCheckout(
+  userId: number,
+  verifiedTerminalSubscriptionId: string | null
+): Promise<
+  | { ok: true; reservedAt: Date; previousStatus: string }
+  | { ok: false; reason: "existing_subscription" | "checkout_pending" }
+> {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+
+  return database.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    const [existing] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+
+    if (
+      existing?.stripeSubscriptionId &&
+      existing.stripeSubscriptionId !== verifiedTerminalSubscriptionId
+    ) {
+      return { ok: false, reason: "existing_subscription" } as const;
+    }
+    if (
+      existing?.status === "checkout_pending" &&
+      Date.now() - existing.updatedAt.getTime() < CHECKOUT_RESERVATION_TTL_MS
+    ) {
+      return { ok: false, reason: "checkout_pending" } as const;
+    }
+
+    const reservedAt = new Date();
+    const previousStatus =
+      existing?.status === "checkout_pending"
+        ? "inactive"
+        : (existing?.status ?? "inactive");
+    if (existing) {
+      await tx
+        .update(subscriptions)
+        .set({ status: "checkout_pending", updatedAt: reservedAt })
+        .where(eq(subscriptions.userId, userId));
+    } else {
+      await tx.insert(subscriptions).values({
+        userId,
+        status: "checkout_pending",
+        updatedAt: reservedAt,
+      });
+    }
+    return { ok: true, reservedAt, previousStatus } as const;
+  });
+}
+
+/** Release only the checkout reservation created by the matching request. */
+export async function releaseSubscriptionCheckout(
+  userId: number,
+  reservedAt: Date,
+  previousStatus: string
+) {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  await database
+    .update(subscriptions)
+    .set({ status: previousStatus })
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.status, "checkout_pending"),
+        eq(subscriptions.updatedAt, reservedAt)
+      )
+    );
+}
+
 /** The single gate for paid features: active subscription required. */
 export async function hasActiveSubscription(userId: number): Promise<boolean> {
   const sub = await getSubscription(userId);
@@ -1014,6 +1093,9 @@ export async function issueTemporaryPasswordByAdmin(input: {
   targetUserId: number;
   passwordHash: string;
 }) {
+  if (input.adminId === input.targetUserId) {
+    throw new Error("SELF_PASSWORD_RESET");
+  }
   const database = await getDb();
   if (!database) throw new Error("Database not available");
   return database.transaction(async tx => {

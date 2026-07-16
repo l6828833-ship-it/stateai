@@ -115,10 +115,10 @@ export default function PricingTable({
         <div className="mx-auto mb-5 flex max-w-3xl flex-col items-center justify-between gap-3 rounded-2xl border border-zinc-700 bg-gradient-to-r from-zinc-950 via-zinc-800 to-zinc-950 px-5 py-3 text-white shadow-lg sm:flex-row">
           <div className="text-center sm:text-left">
             <p className="text-xs font-black uppercase tracking-[0.2em] text-zinc-300">
-              Launch value event · save up to 47%
+              Launch countdown · save up to 47% versus à la carte
             </p>
             <p className="mt-0.5 text-xs text-zinc-400">
-              Versus the displayed à la carte value · campaign ends Aug 1 UTC
+              Countdown celebrates launch; listed plan prices do not expire
             </p>
           </div>
           <div

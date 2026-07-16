@@ -117,12 +117,16 @@ function isExactRecurringPrice(
   );
 }
 
-function isExactPlanPrice(price: Stripe.Price, planId: PlanId): boolean {
+function isExactPlanPrice(
+  price: Stripe.Price,
+  planId: PlanId,
+  requireActive = true
+): boolean {
   const plan = PLAN_BY_ID[planId];
   return isExactRecurringPrice(
     price,
     { amount: plan.totalPrice * 100, interval: plan.interval },
-    true
+    requireActive
   );
 }
 
@@ -134,7 +138,7 @@ export function classifyGenerationPrice(
   const currentPlanId = CURRENT_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (currentPlanId) {
     const plan = PLAN_BY_ID[currentPlanId];
-    return isExactPlanPrice(price, currentPlanId)
+    return isExactPlanPrice(price, currentPlanId, false)
       ? {
           planId: currentPlanId,
           enforceAllowance: true,
@@ -169,15 +173,50 @@ export function classifyGenerationPrice(
     : null;
 }
 
-function isExactAdditionalVideoPrice(price: Stripe.Price): boolean {
+const LEGACY_ADDITIONAL_VIDEO_LOOKUP_KEY =
+  "estatetour_additional_video_v2" as const;
+const LEGACY_ADDITIONAL_VIDEO_PRICE_CENTS = 1500;
+
+function isExactOneTimePrice(
+  price: Stripe.Price,
+  amount: number,
+  requireActive: boolean
+): boolean {
   return (
-    price.active &&
+    (!requireActive || price.active) &&
     price.type === "one_time" &&
     price.billing_scheme === "per_unit" &&
     price.currency === "usd" &&
-    price.unit_amount === ADDITIONAL_VIDEO_PRICE_CENTS &&
+    price.unit_amount === amount &&
     price.recurring === null
   );
+}
+
+function isExactAdditionalVideoPrice(price: Stripe.Price): boolean {
+  return isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_CENTS, true);
+}
+
+/**
+ * Recognize exact completed add-on purchases from both the current $17 price
+ * and the retired $15 price. Retired prices are redemption-only: checkout
+ * always uses the current active v3 price.
+ */
+export function recognizedAdditionalVideoAmount(
+  price: Stripe.Price
+): number | null {
+  if (
+    price.lookup_key === ADDITIONAL_VIDEO_LOOKUP_KEY &&
+    isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_CENTS, false)
+  ) {
+    return ADDITIONAL_VIDEO_PRICE_CENTS;
+  }
+  if (
+    price.lookup_key === LEGACY_ADDITIONAL_VIDEO_LOOKUP_KEY &&
+    isExactOneTimePrice(price, LEGACY_ADDITIONAL_VIDEO_PRICE_CENTS, false)
+  ) {
+    return LEGACY_ADDITIONAL_VIDEO_PRICE_CENTS;
+  }
+  return null;
 }
 
 export async function ensurePrice(planId: PlanId): Promise<string> {
@@ -292,29 +331,124 @@ export async function handleCheckout(
     const origin = getOrigin(req);
 
     const existingSub = await db.getSubscription(user.id);
+    let verifiedTerminalSubscriptionId: string | null = null;
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      allow_promotion_codes: true,
-      client_reference_id: user.id.toString(),
-      customer: existingSub?.stripeCustomerId || undefined,
-      customer_email: existingSub?.stripeCustomerId
-        ? undefined
-        : (user.email ?? undefined),
-      metadata: {
-        user_id: user.id.toString(),
-        customer_email: user.email ?? "",
-        customer_name: user.name ?? "",
-        plan_id: planParam,
-      },
-      subscription_data: {
-        metadata: { user_id: user.id.toString(), plan_id: planParam },
-      },
-      success_url: `${origin}/dashboard?checkout=success`,
-      cancel_url: `${origin}/dashboard?checkout=cancelled`,
-    });
-    res.json({ url: session.url });
+    // A Checkout Session always creates a new subscription. Ask Stripe for the
+    // authoritative state whenever a prior subscription id exists: every
+    // recoverable state (active, trialing, past_due, unpaid, incomplete, or
+    // paused) goes to the portal, while only terminal canceled or
+    // incomplete-expired subscriptions may start over.
+    if (existingSub?.stripeSubscriptionId) {
+      let existingStripeSubscription: Stripe.Subscription;
+      try {
+        existingStripeSubscription = await stripe.subscriptions.retrieve(
+          existingSub.stripeSubscriptionId
+        );
+      } catch (error) {
+        console.error(
+          "[Billing] Refusing a new checkout because the existing Stripe subscription could not be verified:",
+          error
+        );
+        res.status(409).json({
+          error:
+            "Your existing subscription could not be verified. Open billing or contact support before starting another plan.",
+        });
+        return;
+      }
+
+      const terminal =
+        existingStripeSubscription.status === "canceled" ||
+        existingStripeSubscription.status === "incomplete_expired";
+      if (!terminal) {
+        if (!existingSub.stripeCustomerId) {
+          res.status(409).json({
+            error:
+              "An existing subscription already exists. Contact support to manage it safely.",
+          });
+          return;
+        }
+        const portal = await stripe.billingPortal.sessions.create({
+          customer: existingSub.stripeCustomerId,
+          return_url: `${origin}/dashboard`,
+        });
+        res.json({ url: portal.url, existingSubscription: true });
+        return;
+      }
+      verifiedTerminalSubscriptionId = existingStripeSubscription.id;
+    }
+
+    // Reserve checkout creation under a database advisory lock. Concurrent
+    // requests cannot create two completable sessions before Stripe webhooks
+    // update the local subscription row.
+    const reservation = await db.reserveSubscriptionCheckout(
+      user.id,
+      verifiedTerminalSubscriptionId
+    );
+    if (!reservation.ok) {
+      res.status(409).json({
+        error:
+          reservation.reason === "checkout_pending"
+            ? "A subscription checkout is already in progress. Complete it or try again in about 40 minutes."
+            : "An existing subscription must be managed before starting another plan.",
+      });
+      return;
+    }
+
+    try {
+      const session = await stripe.checkout.sessions.create(
+        {
+          mode: "subscription",
+          line_items: [{ price: priceId, quantity: 1 }],
+          allow_promotion_codes: true,
+          client_reference_id: user.id.toString(),
+          customer: existingSub?.stripeCustomerId || undefined,
+          customer_email: existingSub?.stripeCustomerId
+            ? undefined
+            : (user.email ?? undefined),
+          metadata: {
+            user_id: user.id.toString(),
+            customer_email: user.email ?? "",
+            customer_name: user.name ?? "",
+            plan_id: planParam,
+          },
+          subscription_data: {
+            metadata: { user_id: user.id.toString(), plan_id: planParam },
+          },
+          // Checkout expires five minutes before its reservation. The margin
+          // keeps Stripe's minimum 30-minute lifetime valid after request
+          // processing while preventing overlap with a later reservation.
+          expires_at: Math.floor((Date.now() + 35 * 60 * 1000) / 1000),
+          success_url: `${origin}/dashboard?checkout=success`,
+          cancel_url: `${origin}/dashboard?checkout=cancelled`,
+        },
+        {
+          // Derived from the durable reservation timestamp. Stripe returns the
+          // same Session if this request is retried after an ambiguous failure.
+          idempotencyKey: `subscription_checkout_${user.id}_${reservation.reservedAt.getTime()}`,
+        }
+      );
+      res.json({ url: session.url });
+    } catch (error) {
+      const definitelyNotCreated =
+        error instanceof Stripe.errors.StripeInvalidRequestError ||
+        error instanceof Stripe.errors.StripeAuthenticationError ||
+        error instanceof Stripe.errors.StripePermissionError;
+      if (definitelyNotCreated) {
+        await db.releaseSubscriptionCheckout(
+          user.id,
+          reservation.reservedAt,
+          reservation.previousStatus
+        );
+      } else {
+        // Connection/API failures are ambiguous: Stripe may have created the
+        // Session. Keep the reservation until after that Session's expiration
+        // rather than risk creating a duplicate subscription.
+        console.warn(
+          "[Billing] Keeping checkout reservation after ambiguous Stripe failure"
+        );
+      }
+      throw error;
+    }
   } catch (e) {
     console.error("[Billing] Checkout error:", e);
     res.status(500).json({ error: "Could not start checkout" });
@@ -468,7 +602,7 @@ export async function getStripeGenerationEntitlement(userId: number): Promise<{
   };
 }
 
-/** Verify an exact, paid USD $17 checkout before allowing its generation. */
+/** Verify an exact paid v3 $17 or legacy v2 $15 add-on checkout. */
 export async function verifyAdditionalVideoCheckout(
   sessionId: string,
   userId: number
@@ -476,23 +610,27 @@ export async function verifyAdditionalVideoCheckout(
   if (!sessionId.startsWith("cs_")) return false;
 
   const stripe = getStripe();
-  const expectedPriceId = await ensureAdditionalVideoPrice();
   const [session, lineItems] = await Promise.all([
     stripe.checkout.sessions.retrieve(sessionId),
     stripe.checkout.sessions.listLineItems(sessionId, { limit: 2 }),
   ]);
   const item = lineItems.data[0];
-  const itemPriceId =
-    typeof item?.price === "string" ? item.price : item?.price?.id;
+  const price =
+    typeof item?.price === "string"
+      ? await stripe.prices.retrieve(item.price)
+      : item?.price;
+  const recognizedAmount = price
+    ? recognizedAdditionalVideoAmount(price)
+    : null;
 
   return (
+    recognizedAmount !== null &&
     session.mode === "payment" &&
     session.payment_status === "paid" &&
     session.currency === "usd" &&
-    session.amount_total === ADDITIONAL_VIDEO_PRICE_CENTS &&
+    session.amount_total === recognizedAmount &&
     lineItems.data.length === 1 &&
     item?.quantity === 1 &&
-    itemPriceId === expectedPriceId &&
     session.metadata?.purchase_type === "additional_video" &&
     session.metadata?.user_id === userId.toString()
   );

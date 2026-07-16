@@ -713,7 +713,12 @@ export default function Admin() {
                       <Button
                         variant="outline"
                         onClick={openPasswordDialog}
-                        disabled={busy}
+                        disabled={busy || selected.user.id === user.id}
+                        title={
+                          selected.user.id === user.id
+                            ? "Use your account password-change flow for your own password"
+                            : undefined
+                        }
                       >
                         <KeyRound className="mr-2 h-4 w-4" /> Temporary password
                       </Button>
@@ -871,7 +876,8 @@ export default function Admin() {
               disabled={
                 temporaryPassword.length < 12 ||
                 passwordMutation.isPending ||
-                !selectedUserId
+                !selectedUserId ||
+                selectedUserId === user.id
               }
               onClick={() =>
                 selectedUserId &&

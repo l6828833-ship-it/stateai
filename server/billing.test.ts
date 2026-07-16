@@ -9,6 +9,7 @@ import {
 import {
   classifyGenerationPrice,
   getAnchoredMonthlyUsageWindowStart,
+  recognizedAdditionalVideoAmount,
 } from "./billing";
 
 function recurringPrice(input: {
@@ -31,6 +32,22 @@ function recurringPrice(input: {
       trial_period_days: null,
       usage_type: "licensed",
     },
+  } as unknown as Stripe.Price;
+}
+
+function oneTimePrice(input: {
+  lookupKey: string;
+  amount: number;
+  active?: boolean;
+}): Stripe.Price {
+  return {
+    active: input.active ?? true,
+    billing_scheme: "per_unit",
+    currency: "usd",
+    lookup_key: input.lookupKey,
+    type: "one_time",
+    unit_amount: input.amount,
+    recurring: null,
   } as unknown as Stripe.Price;
 }
 
@@ -173,7 +190,7 @@ describe("exact Stripe price classification", () => {
     });
   });
 
-  it("fails closed for unknown, inactive-current, or inexact prices", () => {
+  it("fails closed for unknown or inexact prices while honoring archived subscriptions", () => {
     const exact = recurringPrice({
       lookupKey: "estatetour_starter_yearly_v3",
       amount: 34800,
@@ -182,7 +199,12 @@ describe("exact Stripe price classification", () => {
     expect(
       classifyGenerationPrice({ ...exact, lookup_key: "unknown" })
     ).toBeNull();
-    expect(classifyGenerationPrice({ ...exact, active: false })).toBeNull();
+    expect(classifyGenerationPrice({ ...exact, active: false })).toEqual({
+      planId: "starter_yearly",
+      enforceAllowance: true,
+      allowance: 3,
+      usageWindow: "anchored_month",
+    });
     expect(
       classifyGenerationPrice({ ...exact, unit_amount: 34799 })
     ).toBeNull();
@@ -191,6 +213,37 @@ describe("exact Stripe price classification", () => {
         ...exact,
         recurring: { ...exact.recurring!, interval_count: 2 },
       })
+    ).toBeNull();
+  });
+});
+
+describe("additional-video price compatibility", () => {
+  it("issues v3 at $17 while honoring exact paid v2 $15 sessions", () => {
+    expect(
+      recognizedAdditionalVideoAmount(
+        oneTimePrice({
+          lookupKey: "estatetour_additional_video_v3",
+          amount: 1700,
+          active: false,
+        })
+      )
+    ).toBe(1700);
+    expect(
+      recognizedAdditionalVideoAmount(
+        oneTimePrice({
+          lookupKey: "estatetour_additional_video_v2",
+          amount: 1500,
+          active: false,
+        })
+      )
+    ).toBe(1500);
+    expect(
+      recognizedAdditionalVideoAmount(
+        oneTimePrice({
+          lookupKey: "estatetour_additional_video_v2",
+          amount: 1700,
+        })
+      )
     ).toBeNull();
   });
 });

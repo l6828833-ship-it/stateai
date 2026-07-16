@@ -39,6 +39,11 @@ function adminMutationError(error: unknown): never {
       code: "BAD_REQUEST",
       message: "You cannot remove your own administrator role.",
     },
+    SELF_PASSWORD_RESET: {
+      code: "BAD_REQUEST",
+      message:
+        "Administrators cannot replace their own password here. Use the normal password-change flow.",
+    },
   };
   const known = knownErrors[message];
   if (known) throw new TRPCError(known);
