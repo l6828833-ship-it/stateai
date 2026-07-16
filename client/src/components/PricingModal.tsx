@@ -32,7 +32,7 @@ export default function PricingModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[94vh] w-[min(97vw,72rem)] !max-w-none overflow-y-auto rounded-3xl border-zinc-200 bg-[#fffafb]/95 p-5 backdrop-blur-2xl sm:p-8">
+      <DialogContent className="max-h-[94vh] w-[min(97vw,72rem)] !max-w-none overflow-y-auto rounded-3xl border-zinc-200 bg-background/95 p-5 backdrop-blur-2xl sm:p-8">
         <div className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-950 px-3 py-1 text-xs font-medium text-white">
             <Sparkles className="h-3.5 w-3.5" /> Limited launch pricing

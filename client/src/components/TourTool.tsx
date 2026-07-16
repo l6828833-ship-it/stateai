@@ -227,7 +227,7 @@ export default function TourTool({
                 className={cn(
                   "group relative w-32 shrink-0 rounded-xl transition-all duration-300",
                   draggingIndex === index && "opacity-60 scale-95",
-                  dragOverIndex === index && "translate-x-1 pink-glow",
+                  dragOverIndex === index && "translate-x-1 focus-glow",
                 )}
                 style={{ transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
               >

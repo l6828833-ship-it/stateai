@@ -91,7 +91,7 @@ export default function DashboardSidebar({
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-primary/15 bg-sidebar/80 backdrop-blur-xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-white/10 bg-zinc-950 text-white shadow-2xl shadow-black/15 transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -99,7 +99,7 @@ export default function DashboardSidebar({
         <div
           className="pointer-events-none absolute -top-10 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full opacity-40 blur-3xl"
           style={{
-            background: "radial-gradient(circle, #F7B8D0 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(255,255,255,.18) 0%, transparent 70%)",
           }}
         />
 
@@ -107,16 +107,16 @@ export default function DashboardSidebar({
         <div className="relative flex h-16 items-center justify-between px-5">
           <a
             href="/"
-            className="flex items-center gap-2 font-display text-lg text-foreground"
+            className="flex items-center gap-2 font-display text-lg text-white"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm">
               <Clapperboard className="h-4 w-4" />
             </span>
             EstateTour
           </a>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted lg:hidden"
+            className="rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
           >
             <span className="sr-only">Close sidebar</span>
             <X className="h-5 w-5" />
@@ -125,22 +125,22 @@ export default function DashboardSidebar({
 
         <div className="relative flex-1 overflow-y-auto px-4 pb-4">
           {/* User Profile */}
-          <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-card/60 p-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/60 text-sm font-semibold text-primary-foreground">
+          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-zinc-950">
               {user?.name?.charAt(0).toUpperCase() ?? "U"}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">
+              <p className="truncate text-sm font-medium text-white">
                 {user?.name ?? "User"}
               </p>
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="truncate text-xs text-white/50">
                 {user?.email}
               </p>
             </div>
           </div>
 
           {/* Navigation */}
-          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Menu
           </p>
           <nav className="space-y-1">
@@ -156,19 +156,19 @@ export default function DashboardSidebar({
                   className={cn(
                     "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
                     active
-                      ? "bg-primary/12 text-primary shadow-sm"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      ? "bg-white text-zinc-950 shadow-sm"
+                      : "text-white/55 hover:bg-white/10 hover:text-white"
                   )}
                 >
                   <item.icon
                     className={cn(
                       "h-4 w-4 shrink-0 transition-transform group-hover:scale-110",
-                      active && "text-primary"
+                      active && "text-zinc-950"
                     )}
                   />
                   <span>{item.label}</span>
                   {active && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-zinc-950" />
                   )}
                 </button>
               );
@@ -176,11 +176,11 @@ export default function DashboardSidebar({
             {user?.role === "admin" && (
               <button
                 onClick={() => navigate("/admin")}
-                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-zinc-900 hover:text-white"
+                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/55 transition-all hover:bg-white/10 hover:text-white"
               >
                 <ShieldCheck className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
                 <span>Admin Console</span>
-                <span className="ml-auto rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-bold uppercase text-zinc-700 group-hover:bg-white/15 group-hover:text-white">
+                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-bold uppercase text-white/70 group-hover:bg-white group-hover:text-zinc-950">
                   Admin
                 </span>
               </button>
@@ -188,7 +188,7 @@ export default function DashboardSidebar({
           </nav>
 
           {/* Quick Stats */}
-          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Quick stats
           </p>
           <div className="grid grid-cols-3 gap-2">
@@ -203,13 +203,13 @@ export default function DashboardSidebar({
             ].map(s => (
               <div
                 key={s.label}
-                className="flex flex-col items-center gap-1 rounded-xl border border-border/60 bg-card/60 px-2 py-3 text-center"
+                className="flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 py-3 text-center"
               >
-                <s.icon className="h-3.5 w-3.5 text-primary" />
-                <span className="text-lg font-semibold leading-none text-foreground">
+                <s.icon className="h-3.5 w-3.5 text-white/60" />
+                <span className="text-lg font-semibold leading-none text-white">
                   {s.value}
                 </span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[10px] text-white/50">
                   {s.label}
                 </span>
               </div>
@@ -217,25 +217,18 @@ export default function DashboardSidebar({
           </div>
 
           {/* Subscription / Upgrade card */}
-          <div
-            className={cn(
-              "mt-6 overflow-hidden rounded-2xl border p-4",
-              subscribed
-                ? "border-primary/25 bg-gradient-to-br from-primary/12 to-primary/5"
-                : "border-primary/20 bg-gradient-to-br from-accent/80 to-card/60"
-            )}
-          >
+          <div className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="mb-1 flex items-center gap-2">
               {subscribed ? (
-                <Crown className="h-4 w-4 text-primary" />
+                <Crown className="h-4 w-4 text-white/65" />
               ) : (
-                <Zap className="h-4 w-4 text-primary" />
+                <Zap className="h-4 w-4 text-white/65" />
               )}
-              <p className="text-sm font-semibold text-foreground">
+              <p className="text-sm font-semibold text-white">
                 {planLabel}
               </p>
             </div>
-            <p className="mb-3 text-xs text-muted-foreground">
+            <p className="mb-3 text-xs text-white/50">
               {subscribed
                 ? "Cinematic 1080p generations without watermarks."
                 : "Upgrade for cinematic 1080p tours without watermarks."}
@@ -244,7 +237,7 @@ export default function DashboardSidebar({
               <div className="space-y-2">
                 <Button
                   size="sm"
-                  className="btn-springy w-full rounded-full"
+                  className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
                   onClick={onBuyAdditionalVideo}
                 >
                   <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video · $17
@@ -252,7 +245,7 @@ export default function DashboardSidebar({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="btn-springy w-full rounded-full bg-card/70"
+                  className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                   onClick={onBillingClick}
                 >
                   <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
@@ -261,7 +254,7 @@ export default function DashboardSidebar({
             ) : (
               <Button
                 size="sm"
-                className="btn-springy w-full rounded-full"
+                className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
                 onClick={onUpgradeClick}
               >
                 <Crown className="mr-1.5 h-3.5 w-3.5" /> Upgrade plan
@@ -271,11 +264,11 @@ export default function DashboardSidebar({
         </div>
 
         {/* Footer */}
-        <div className="relative border-t border-border/60 p-4">
+        <div className="relative border-t border-white/10 p-4">
           <Button
             variant="ghost"
             size="sm"
-            className="btn-springy w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="btn-springy w-full justify-start text-white/55 hover:bg-white/10 hover:text-white"
             onClick={handleLogout}
           >
             <LogOut className="mr-2 h-4 w-4" /> Sign out
