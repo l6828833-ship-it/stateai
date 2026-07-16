@@ -205,6 +205,13 @@ export const subscriptions = pgTable("subscriptions", {
   userId: integer("userId").notNull().unique(),
   stripeCustomerId: varchar("stripeCustomerId", { length: 128 }),
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
+  /** Stripe subscriptions and complimentary admin grants have different authority. */
+  billingSource: varchar("billingSource", {
+    length: 16,
+    enum: ["stripe", "admin"],
+  })
+    .default("stripe")
+    .notNull(),
   plan: planEnum("plan"),
   status: varchar("status", { length: 32 }).default("inactive").notNull(),
   /** Durable checkout reservation state, isolated from webhook-managed status. */

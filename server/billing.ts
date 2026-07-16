@@ -250,8 +250,7 @@ export function classifyGenerationPrice(
 ): ClassifiedGenerationPrice | null {
   const lookupKey = price.lookup_key ?? "";
   const versioned =
-    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ??
-    V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ?? V4_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (versioned) {
     // Archived prices remain valid for subscriptions that already bought them;
     // `active` controls new purchases, not existing entitlements.
@@ -353,8 +352,7 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
   const plan = PLAN_BY_ID[planId];
   const lookupKey = CURRENT_PRICE_LOOKUP_BY_PLAN[planId];
   const contract =
-    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ??
-    V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+    V5_PRICE_BY_LOOKUP_KEY[lookupKey] ?? V4_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (
     !contract ||
     contract.amount !== plan.price * 100 ||
@@ -402,9 +400,7 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
   return price.id;
 }
 
-async function ensureAdditionalVideoPrice(
-  amountUsd: number
-): Promise<string> {
+async function ensureAdditionalVideoPrice(amountUsd: number): Promise<string> {
   const amountCents = amountUsd * 100;
   const cached = additionalVideoPriceCache.get(amountCents);
   if (cached) return cached;
@@ -475,6 +471,10 @@ function getOrigin(req: Request): string {
     (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
   const host = req.headers.host ?? "localhost";
   return `${proto}://${host}`;
+}
+
+function isTrustedBillingMutation(req: Request): boolean {
+  return req.headers["x-estatetour-request"] === "billing";
 }
 
 /** POST /api/billing/checkout?plan=<tier>_<interval> — requires authentication. */
@@ -564,7 +564,7 @@ export async function handleCheckout(
         return;
       }
     } else if (
-      existingSub &&
+      existingSub?.stripeSubscriptionId &&
       !["inactive", "canceled", "incomplete_expired"].includes(
         existingSub.status
       )
@@ -609,15 +609,37 @@ export async function handleCheckout(
         }
 
         if (existingSession.status === "open") {
-          if (reservation.planId !== planParam) {
-            res.status(409).json({
-              error:
-                "A checkout for another plan is already open. Complete it or wait for it to expire.",
-            });
+          if (reservation.planId === planParam) {
+            res.json({ url: existingSession.url, existingCheckout: true });
             return;
           }
-          res.json({ url: existingSession.url, existingCheckout: true });
-          return;
+
+          // The user abandoned a previous plan selection and chose another one.
+          // Expire the old Stripe Session before replacing the durable reservation
+          // so it can never be completed after the new Checkout is created.
+          try {
+            existingSession = await stripe.checkout.sessions.expire(
+              existingSession.id
+            );
+          } catch (error) {
+            // Completion can race with expiration. Re-read Stripe and let the
+            // completed-session reconciliation below win rather than creating a
+            // second subscription.
+            console.warn(
+              "[Billing] Checkout expiration raced with a Stripe state change:",
+              error
+            );
+            existingSession = await stripe.checkout.sessions.retrieve(
+              reservation.sessionId
+            );
+            if (existingSession.status === "open") {
+              res.status(409).json({
+                error:
+                  "The previous checkout could not be closed. Please try again in a moment.",
+              });
+              return;
+            }
+          }
         }
         if (existingSession.status === "complete") {
           const subscriptionRef = existingSession.subscription;
@@ -790,13 +812,41 @@ export async function handleAdditionalVideoCheckout(
   }
 }
 
-/** Return Stripe's exact period and immutable terms classified from its price. */
+/** Return the exact active entitlement from Stripe or an admin-managed plan. */
 export async function getStripeGenerationEntitlement(
   userId: number
 ): Promise<GenerationEntitlement | null> {
   const stored = await db.getSubscription(userId);
-  if (!stored?.stripeSubscriptionId) return null;
+  if (!stored) return null;
 
+  // Admins can grant a plan to users who do not yet have a Stripe
+  // subscription. Those grants use explicit local periods and current catalog
+  // terms; Stripe-backed subscriptions continue to use immutable Stripe prices.
+  if (stored.billingSource === "admin") {
+    if (
+      !stored.plan ||
+      !isPlanId(stored.plan) ||
+      (stored.status !== "active" && stored.status !== "trialing") ||
+      !stored.currentPeriodStart ||
+      !stored.currentPeriodEnd ||
+      stored.currentPeriodEnd.getTime() < Date.now()
+    ) {
+      return null;
+    }
+    const plan = PLAN_BY_ID[stored.plan];
+    return {
+      periodStart: stored.currentPeriodStart,
+      periodEnd: stored.currentPeriodEnd,
+      enforceAllowance: true,
+      planId: plan.id,
+      includedVideos: plan.includedVideos,
+      maxImages: plan.maxImages,
+      maxDurationSeconds: plan.maxDurationSeconds,
+      additionalVideoPriceUsd: plan.additionalVideoPriceUsd,
+    };
+  }
+
+  if (!stored.stripeSubscriptionId) return null;
   const subscription = await getStripe().subscriptions.retrieve(
     stored.stripeSubscriptionId
   );
@@ -897,6 +947,159 @@ export async function verifyAdditionalVideoCheckout(
   return { amountCents: recognizedAmount, scope };
 }
 
+export type BillingManagementSummary = {
+  plan: StoredPlanId | null;
+  status: string;
+  source: "stripe" | "admin";
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  canManageInStripe: boolean;
+};
+
+async function getBillingManagementSummary(
+  userId: number
+): Promise<BillingManagementSummary> {
+  let stored = await db.getSubscription(userId);
+  if (!stored) {
+    return {
+      plan: null,
+      status: "inactive",
+      source: "admin",
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      canManageInStripe: false,
+    };
+  }
+
+  if (stored.billingSource === "admin") {
+    const periodActive =
+      !stored.currentPeriodEnd ||
+      stored.currentPeriodEnd.getTime() >= Date.now();
+    const status =
+      (stored.status === "active" || stored.status === "trialing") &&
+      !periodActive
+        ? "expired"
+        : stored.status;
+    return {
+      plan: stored.plan,
+      status,
+      source: "admin",
+      currentPeriodEnd: stored.currentPeriodEnd?.toISOString() ?? null,
+      cancelAtPeriodEnd: false,
+      canManageInStripe: false,
+    };
+  }
+
+  if (!stored.stripeSubscriptionId) {
+    return {
+      plan: stored.plan,
+      status: stored.status,
+      source: "stripe",
+      currentPeriodEnd: stored.currentPeriodEnd?.toISOString() ?? null,
+      cancelAtPeriodEnd: false,
+      canManageInStripe: false,
+    };
+  }
+
+  const subscription = await getStripe().subscriptions.retrieve(
+    stored.stripeSubscriptionId
+  );
+  await syncSubscriptionToDb(subscription);
+  stored = (await db.getSubscription(userId)) ?? stored;
+  return {
+    plan: planFromSubscription(subscription) ?? stored.plan,
+    status: subscription.status,
+    source: "stripe",
+    currentPeriodEnd: stored.currentPeriodEnd?.toISOString() ?? null,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    canManageInStripe: Boolean(stored.stripeCustomerId),
+  };
+}
+
+/** GET /api/billing/status — live subscription details for the billing popup. */
+export async function handleBillingStatus(
+  _req: Request,
+  res: Response,
+  user: { id: number }
+) {
+  try {
+    res.json(await getBillingManagementSummary(user.id));
+  } catch (error) {
+    console.error("[Billing] Status error:", error);
+    res.status(500).json({ error: "Could not load billing details" });
+  }
+}
+
+async function updateSubscriptionCancellation(
+  userId: number,
+  cancelAtPeriodEnd: boolean
+): Promise<BillingManagementSummary> {
+  const stored = await db.getSubscription(userId);
+  if (stored?.billingSource !== "stripe" || !stored.stripeSubscriptionId) {
+    throw new Error(
+      "This plan is managed by an administrator and cannot be changed in Stripe"
+    );
+  }
+  const stripe = getStripe();
+  const existing = await stripe.subscriptions.retrieve(
+    stored.stripeSubscriptionId
+  );
+  if (isTerminalSubscriptionStatus(existing.status)) {
+    throw new Error("This subscription is no longer active");
+  }
+  const updated = await stripe.subscriptions.update(existing.id, {
+    cancel_at_period_end: cancelAtPeriodEnd,
+  });
+  await syncSubscriptionToDb(updated);
+  return getBillingManagementSummary(userId);
+}
+
+/** POST /api/billing/cancel — cancel safely at the end of the paid period. */
+export async function handleCancelSubscription(
+  req: Request,
+  res: Response,
+  user: { id: number }
+) {
+  if (!isTrustedBillingMutation(req)) {
+    res.status(403).json({ error: "Invalid billing request" });
+    return;
+  }
+  try {
+    res.json(await updateSubscriptionCancellation(user.id, true));
+  } catch (error) {
+    console.error("[Billing] Cancellation error:", error);
+    res.status(400).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not cancel the subscription",
+    });
+  }
+}
+
+/** POST /api/billing/resume — remove a scheduled end-of-period cancellation. */
+export async function handleResumeSubscription(
+  req: Request,
+  res: Response,
+  user: { id: number }
+) {
+  if (!isTrustedBillingMutation(req)) {
+    res.status(403).json({ error: "Invalid billing request" });
+    return;
+  }
+  try {
+    res.json(await updateSubscriptionCancellation(user.id, false));
+  } catch (error) {
+    console.error("[Billing] Resume error:", error);
+    res.status(400).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not resume the subscription",
+    });
+  }
+}
+
 /** POST /api/billing/portal — opens the Stripe billing portal. */
 export async function handlePortal(
   req: Request,
@@ -905,7 +1108,7 @@ export async function handlePortal(
 ) {
   try {
     const sub = await db.getSubscription(user.id);
-    if (!sub?.stripeCustomerId) {
+    if (sub?.billingSource !== "stripe" || !sub.stripeCustomerId) {
       res
         .status(400)
         .json({ error: "No billing account yet — subscribe to a plan first" });
@@ -930,7 +1133,7 @@ export async function changeSubscriptionPlan(
   planId: PlanId
 ): Promise<void> {
   const stored = await db.getSubscription(userId);
-  if (!stored?.stripeSubscriptionId) {
+  if (stored?.billingSource !== "stripe" || !stored.stripeSubscriptionId) {
     throw new Error("This user does not have a Stripe subscription to change");
   }
 
@@ -938,6 +1141,9 @@ export async function changeSubscriptionPlan(
   const subscription = await stripe.subscriptions.retrieve(
     stored.stripeSubscriptionId
   );
+  if (isTerminalSubscriptionStatus(subscription.status)) {
+    throw new Error("This Stripe subscription is no longer active");
+  }
   if (subscription.items.data.length !== 1) {
     throw new Error("Only subscriptions with one plan item can be changed");
   }
@@ -982,7 +1188,8 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
   const plan = planFromSubscription(sub);
   const periodStart = sub.items.data[0]?.current_period_start;
   const periodEnd = sub.items.data[0]?.current_period_end;
-  await db.upsertSubscription(userId, {
+  const checkoutReservationKey = sub.metadata?.checkout_reservation_key;
+  const applied = await db.upsertStripeSubscription(userId, {
     stripeCustomerId:
       typeof sub.customer === "string" ? sub.customer : sub.customer.id,
     stripeSubscriptionId: sub.id,
@@ -992,16 +1199,14 @@ async function syncSubscriptionToDb(sub: Stripe.Subscription) {
       ? { currentPeriodStart: new Date(periodStart * 1000) }
       : {}),
     ...(periodEnd ? { currentPeriodEnd: new Date(periodEnd * 1000) } : {}),
+    ...(checkoutReservationKey ? { checkoutReservationKey } : {}),
+    clearCheckoutReservation: !isTerminalSubscriptionStatus(sub.status),
   });
-  const checkoutReservationKey = sub.metadata?.checkout_reservation_key;
-  if (
-    !isTerminalSubscriptionStatus(sub.status) &&
-    checkoutReservationKey
-  ) {
-    await db.clearSubscriptionCheckoutReservation(
-      userId,
-      checkoutReservationKey
+  if (!applied) {
+    console.warn(
+      `[Billing] Ignored stale subscription ${sub.id} for user ${userId}`
     );
+    return;
   }
   console.log(
     `[Billing] Synced subscription ${sub.id} for user ${userId}: ${sub.status}`
@@ -1055,8 +1260,7 @@ export async function handleWebhook(req: Request, res: Response) {
             metadata.user_id = session.client_reference_id;
             metadataChanged = true;
           }
-          const reservationKey =
-            session.metadata?.checkout_reservation_key;
+          const reservationKey = session.metadata?.checkout_reservation_key;
           if (!metadata.checkout_reservation_key && reservationKey) {
             metadata.checkout_reservation_key = reservationKey;
             metadataChanged = true;
@@ -1069,10 +1273,30 @@ export async function handleWebhook(req: Request, res: Response) {
         }
         break;
       }
+      case "checkout.session.expired": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.mode === "subscription") {
+          const userId = Number(
+            session.metadata?.user_id ?? session.client_reference_id
+          );
+          const reservationKey = session.metadata?.checkout_reservation_key;
+          if (Number.isFinite(userId) && reservationKey) {
+            await db.clearSubscriptionCheckoutReservation(
+              userId,
+              reservationKey
+            );
+          }
+        }
+        break;
+      }
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
-        await syncSubscriptionToDb(event.data.object as Stripe.Subscription);
+        const eventSubscription = event.data.object as Stripe.Subscription;
+        const currentSubscription = await getStripe().subscriptions.retrieve(
+          eventSubscription.id
+        );
+        await syncSubscriptionToDb(currentSubscription);
         break;
       }
       case "invoice.paid": {

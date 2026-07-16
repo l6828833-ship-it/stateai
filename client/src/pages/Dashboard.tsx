@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { dataUrlToBase64, prepareImageForUpload } from "@/lib/imageUpload";
+import { authenticatedFetch } from "@/lib/authenticatedFetch";
 import TourTool, {
   type ToolImage,
   type ToolSettings,
@@ -11,6 +12,7 @@ import GenerationTheater, {
   type TheaterMode,
 } from "@/components/GenerationTheater";
 import PricingModal from "@/components/PricingModal";
+import BillingManagementModal from "@/components/BillingManagementModal";
 import PayAsYouGoCard from "@/components/PayAsYouGoCard";
 import DashboardSidebar from "@/components/DashboardSidebar";
 import DashboardBottomNav from "@/components/DashboardBottomNav";
@@ -48,8 +50,7 @@ type DashSection = "overview" | "create" | "videos" | "analytics";
 type PendingAdditionalVideo = { sessionId: string; jobId?: number };
 
 const PENDING_ADDITIONAL_VIDEO_KEY = "estatetour_pending_additional_video";
-const BUY_ONE_VIDEO_AFTER_AUTH_KEY =
-  "estatetour_buy_one_video_after_auth";
+const BUY_ONE_VIDEO_AFTER_AUTH_KEY = "estatetour_buy_one_video_after_auth";
 const DASHBOARD_SIDEBAR_COLLAPSED_KEY =
   "estatetour_dashboard_sidebar_collapsed";
 const RETRYABLE_QUERY_CODES = new Set([
@@ -170,6 +171,7 @@ export default function Dashboard() {
   const [theaterMode, setTheaterMode] = useState<TheaterMode>("idle");
   const [fakePreviewComplete, setFakePreviewComplete] = useState(false);
   const [pricingOpen, setPricingOpen] = useState(false);
+  const [billingOpen, setBillingOpen] = useState(false);
   const [pendingAdditionalVideo, setPendingAdditionalVideo] =
     useState<PendingAdditionalVideo | null>(loadPendingAdditionalVideo);
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
@@ -177,8 +179,7 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(loadSidebarCollapsed);
-  const [activeSection, setActiveSection] =
-    useState<DashSection>("overview");
+  const [activeSection, setActiveSection] = useState<DashSection>("overview");
   const draftSyncedRef = useRef(false);
   const pricingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -207,8 +208,7 @@ export default function Dashboard() {
   });
   const currentCatalogPlan = planForStoredId(currentPlan);
   const maxImages = entitlementQuery.data?.maxImages ?? 6;
-  const maxDurationSeconds =
-    entitlementQuery.data?.maxDurationSeconds ?? 15;
+  const maxDurationSeconds = entitlementQuery.data?.maxDurationSeconds ?? 15;
   const additionalVideoPriceUsd =
     entitlementQuery.data?.additionalVideoPriceUsd;
   const planEntitlementPending = subscribed && !entitlementQuery.data;
@@ -606,9 +606,12 @@ export default function Dashboard() {
 
   const handleSelectPlan = async (planId: PlanId) => {
     try {
-      const res = await fetch(`/api/billing/checkout?plan=${planId}`, {
-        method: "POST",
-      });
+      const res = await authenticatedFetch(
+        `/api/billing/checkout?plan=${planId}`,
+        {
+          method: "POST",
+        }
+      );
       const data = (await res.json()) as { url?: string; error?: string };
       if (data.url) {
         window.location.href = data.url;
@@ -644,13 +647,18 @@ export default function Dashboard() {
 
   const handleBuyAdditionalVideo = async () => {
     if (pendingAdditionalVideo) {
-      toast.info("Use your pending one-video purchase before buying another one");
+      toast.info(
+        "Use your pending one-video purchase before buying another one"
+      );
       return;
     }
     try {
-      const response = await fetch("/api/billing/additional-video", {
-        method: "POST",
-      });
+      const response = await authenticatedFetch(
+        "/api/billing/additional-video",
+        {
+          method: "POST",
+        }
+      );
       const data = (await response.json()) as { url?: string; error?: string };
       if (data.url) {
         window.location.href = data.url;
@@ -679,7 +687,9 @@ export default function Dashboard() {
 
   const handleOpenBillingPortal = async () => {
     try {
-      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const res = await authenticatedFetch("/api/billing/portal", {
+        method: "POST",
+      });
       const data = (await res.json()) as { url?: string; error?: string };
       if (data.url) {
         window.location.href = data.url;
@@ -765,24 +775,26 @@ export default function Dashboard() {
   const readyCount = jobs.filter(j => j.status === "ready").length;
   const processingCount = jobs.filter(j => j.status === "processing").length;
 
-  const sectionCopy: Record<DashSection, { title: string; subtitle: string }> = {
-    overview: {
-      title: `Welcome back${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`,
-      subtitle: "Your studio overview, recent videos, and current project.",
-    },
-    create: {
-      title: "Create a tour",
-      subtitle: "Upload, arrange, and turn listing photos into a cinematic video.",
-    },
-    videos: {
-      title: "Your videos",
-      subtitle: "Every tour you've generated, ready to download and share.",
-    },
-    analytics: {
-      title: "Analytics",
-      subtitle: "A quick look at your studio activity.",
-    },
-  };
+  const sectionCopy: Record<DashSection, { title: string; subtitle: string }> =
+    {
+      overview: {
+        title: `Welcome back${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`,
+        subtitle: "Your studio overview, recent videos, and current project.",
+      },
+      create: {
+        title: "Create a tour",
+        subtitle:
+          "Upload, arrange, and turn listing photos into a cinematic video.",
+      },
+      videos: {
+        title: "Your videos",
+        subtitle: "Every tour you've generated, ready to download and share.",
+      },
+      analytics: {
+        title: "Analytics",
+        subtitle: "A quick look at your studio activity.",
+      },
+    };
   const { title: sectionTitle, subtitle: sectionSubtitle } =
     sectionCopy[activeSection];
 
@@ -817,111 +829,111 @@ export default function Dashboard() {
     const visibleJobs = typeof limit === "number" ? jobs.slice(0, limit) : jobs;
 
     return (
-    <>
-      {jobs.length === 0 ? (
-        <div className="rounded-2xl border border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
-          No videos yet — your generation history will live here.
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {visibleJobs.map(job => (
-            <li
-              key={job.id}
-              className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
-            >
-              <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg bg-muted">
-                {job.thumbnailUrl ? (
-                  <img
-                    src={job.thumbnailUrl}
-                    alt="Tour thumbnail"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <Film className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">
-                  AI-directed tour · {job.resolution}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {new Date(job.createdAt).toLocaleString()}
-                </p>
-                <div className="mt-1">
-                  <StatusBadge
-                    status={job.status as "processing" | "ready" | "failed"}
-                  />
+      <>
+        {jobs.length === 0 ? (
+          <div className="rounded-2xl border border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
+            No videos yet — your generation history will live here.
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {visibleJobs.map(job => (
+              <li
+                key={job.id}
+                className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
+              >
+                <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg bg-muted">
+                  {job.thumbnailUrl ? (
+                    <img
+                      src={job.thumbnailUrl}
+                      alt="Tour thumbnail"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <Film className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="flex shrink-0 flex-col gap-1.5">
-                {job.status === "ready" && (
-                  <>
-                    {(subscribed || job.additionalVideo) && (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    AI-directed tour · {job.resolution}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {new Date(job.createdAt).toLocaleString()}
+                  </p>
+                  <div className="mt-1">
+                    <StatusBadge
+                      status={job.status as "processing" | "ready" | "failed"}
+                    />
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-col gap-1.5">
+                  {job.status === "ready" && (
+                    <>
+                      {(subscribed || job.additionalVideo) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                          onClick={() => handleViewJob(job.id)}
+                        >
+                          <Play className="mr-1 h-3 w-3" /> Play
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
+                        onClick={() =>
+                          subscribed || job.additionalVideo
+                            ? handleDownload(job.id)
+                            : handleOpenPricing()
+                        }
+                      >
+                        <Download className="mr-1 h-3 w-3" /> Get
+                      </Button>
+                    </>
+                  )}
+                  {job.status === "processing" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                      onClick={() => handleViewJob(job.id)}
+                    >
+                      <RefreshCw className="mr-1 h-3 w-3" /> View
+                    </Button>
+                  )}
+                  {job.status === "failed" &&
+                    (job.additionalVideo ? (
                       <Button
                         size="sm"
                         variant="ghost"
                         className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                        onClick={() => handleViewJob(job.id)}
+                        onClick={() =>
+                          toast.error(
+                            "This paid additional video was not resubmitted. Contact support for a refund or replacement."
+                          )
+                        }
                       >
-                        <Play className="mr-1 h-3 w-3" /> Play
+                        <CreditCard className="mr-1 h-3 w-3" /> Support
                       </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
-                      onClick={() =>
-                        subscribed || job.additionalVideo
-                          ? handleDownload(job.id)
-                          : handleOpenPricing()
-                      }
-                    >
-                      <Download className="mr-1 h-3 w-3" /> Get
-                    </Button>
-                  </>
-                )}
-                {job.status === "processing" && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                    onClick={() => handleViewJob(job.id)}
-                  >
-                    <RefreshCw className="mr-1 h-3 w-3" /> View
-                  </Button>
-                )}
-                {job.status === "failed" &&
-                  (job.additionalVideo ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                      onClick={() =>
-                        toast.error(
-                          "This paid additional video was not resubmitted. Contact support for a refund or replacement."
-                        )
-                      }
-                    >
-                      <CreditCard className="mr-1 h-3 w-3" /> Support
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                      onClick={handleGenerate}
-                    >
-                      <RefreshCw className="mr-1 h-3 w-3" /> Retry
-                    </Button>
-                  ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                        onClick={handleGenerate}
+                      >
+                        <RefreshCw className="mr-1 h-3 w-3" /> Retry
+                      </Button>
+                    ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </>
     );
   };
 
@@ -937,7 +949,7 @@ export default function Dashboard() {
         onNavigate={goToSection}
         onUpgradeClick={handleOpenPricing}
         onBuyAdditionalVideo={handleBuyAdditionalVideo}
-        onBillingClick={handleOpenBillingPortal}
+        onBillingClick={() => setBillingOpen(true)}
         additionalVideoPriceUsd={additionalVideoPriceUsd}
         desktopCollapsed={sidebarCollapsed}
         onToggleDesktop={() => setSidebarCollapsed(value => !value)}
@@ -964,9 +976,14 @@ export default function Dashboard() {
             EstateTour
           </a>
           {subscribed ? (
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-primary">
+            <button
+              type="button"
+              onClick={() => setBillingOpen(true)}
+              aria-label="Manage billing"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-primary"
+            >
               <Crown className="h-4 w-4" />
-            </span>
+            </button>
           ) : (
             <Button
               size="sm"
@@ -1003,11 +1020,18 @@ export default function Dashboard() {
                   </span>
                   <Button
                     size="sm"
-                    variant="ghost"
                     className="btn-springy rounded-full"
-                    onClick={handleOpenBillingPortal}
+                    onClick={handleOpenPricing}
                   >
-                    <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Billing
+                    <Crown className="mr-1.5 h-3.5 w-3.5" /> Upgrade
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="btn-springy rounded-full"
+                    onClick={() => setBillingOpen(true)}
+                  >
+                    <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
                   </Button>
                 </>
               ) : (
@@ -1092,8 +1116,9 @@ export default function Dashboard() {
                     Upload, arrange, and generate
                   </h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                    Complete the setup here. The output section stays hidden until
-                    you click Generate, then Create Tour opens automatically.
+                    Complete the setup here. The output section stays hidden
+                    until you click Generate, then Create Tour opens
+                    automatically.
                   </p>
                   <div className="mt-6 min-w-0">
                     {planEntitlementPending ? (
@@ -1188,8 +1213,9 @@ export default function Dashboard() {
                       Verifying your plan benefits
                     </h2>
                     <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                      Your exact image, duration, and additional-video limits load
-                      separately so the rest of your dashboard stays available.
+                      Your exact image, duration, and additional-video limits
+                      load separately so the rest of your dashboard stays
+                      available.
                     </p>
                     {entitlementQuery.isError && (
                       <Button
@@ -1226,59 +1252,60 @@ export default function Dashboard() {
 
               {theaterMode !== "idle" && (
                 <div className="min-w-0 space-y-6">
-                {/* Output theater */}
-                <section id="output-theater">
-                  <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-                    <Film className="h-4 w-4 text-primary" /> Output
-                  </h2>
-                  <GenerationTheater
-                    mode={theaterMode}
-                    previewImageUrl={firstImageUrl}
-                    jobStatus={
-                      theaterMode === "real"
-                        ? ((activeJob?.status ?? "processing") as
-                            | "processing"
-                            | "ready"
-                            | "failed")
-                        : null
-                    }
-                    videoUrl={
-                      theaterMode === "real" &&
-                      (subscribed || activeJob?.additionalVideo)
-                        ? (activeJob?.videoUrl ?? null)
-                        : null
-                    }
-                    errorMessage={activeJob?.errorMessage ?? null}
-                    onFakeComplete={handleFakeComplete}
-                    fakeComplete={fakePreviewComplete}
-                    canPlayVideo={
-                      subscribed || Boolean(activeJob?.additionalVideo)
-                    }
-                    onUnlockClick={handleOpenPricing}
-                    onDownload={() =>
-                      activeJobId && handleDownload(activeJobId)
-                    }
-                  />
-                </section>
-
-                {/* Recent videos preview */}
-                <section>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
-                      <History className="h-4 w-4 text-primary" /> Recent videos
+                  {/* Output theater */}
+                  <section id="output-theater">
+                    <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                      <Film className="h-4 w-4 text-primary" /> Output
                     </h2>
-                    {jobs.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => goToSection("videos")}
-                        className="text-xs font-medium text-primary hover:underline"
-                      >
-                        View all
-                      </button>
-                    )}
-                  </div>
-                  <HistoryList limit={3} />
-                </section>
+                    <GenerationTheater
+                      mode={theaterMode}
+                      previewImageUrl={firstImageUrl}
+                      jobStatus={
+                        theaterMode === "real"
+                          ? ((activeJob?.status ?? "processing") as
+                              | "processing"
+                              | "ready"
+                              | "failed")
+                          : null
+                      }
+                      videoUrl={
+                        theaterMode === "real" &&
+                        (subscribed || activeJob?.additionalVideo)
+                          ? (activeJob?.videoUrl ?? null)
+                          : null
+                      }
+                      errorMessage={activeJob?.errorMessage ?? null}
+                      onFakeComplete={handleFakeComplete}
+                      fakeComplete={fakePreviewComplete}
+                      canPlayVideo={
+                        subscribed || Boolean(activeJob?.additionalVideo)
+                      }
+                      onUnlockClick={handleOpenPricing}
+                      onDownload={() =>
+                        activeJobId && handleDownload(activeJobId)
+                      }
+                    />
+                  </section>
+
+                  {/* Recent videos preview */}
+                  <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <History className="h-4 w-4 text-primary" /> Recent
+                        videos
+                      </h2>
+                      {jobs.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => goToSection("videos")}
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          View all
+                        </button>
+                      )}
+                    </div>
+                    <HistoryList limit={3} />
+                  </section>
                 </div>
               )}
             </div>
@@ -1391,6 +1418,15 @@ export default function Dashboard() {
         onCreateClick={handleCreateClick}
         activeSection={activeSection}
         onNavigate={goToSection}
+      />
+
+      {/* ===== Billing management popup ===== */}
+      <BillingManagementModal
+        open={billingOpen}
+        onOpenChange={setBillingOpen}
+        currentPlan={currentPlan}
+        onChangePlan={handleOpenPricing}
+        onOpenStripePortal={handleOpenBillingPortal}
       />
 
       {/* ===== Pricing popup ===== */}
