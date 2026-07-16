@@ -505,25 +505,6 @@ export async function reserveGenerationJob(
   return database.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(${job.userId})`);
 
-    const [subscription] = await tx
-      .select()
-      .from(subscriptions)
-      .where(eq(subscriptions.userId, job.userId))
-      .limit(1);
-    const active =
-      subscription &&
-      (subscription.status === "active" ||
-        subscription.status === "trialing") &&
-      (!subscription.currentPeriodEnd ||
-        subscription.currentPeriodEnd.getTime() >=
-          Date.now() - 24 * 3600 * 1000);
-    if (!active) return { ok: false, reason: "inactive" } as const;
-    // The Stripe subscription and exact recurring price must be recognized for
-    // every generation path. Never infer entitlement from the denormalized DB plan.
-    if (!billingEntitlement) {
-      return { ok: false, reason: "period_unavailable" } as const;
-    }
-
     if (additionalCheckoutSessionId) {
       const [existing] = await tx
         .select()
@@ -544,8 +525,7 @@ export async function reserveGenerationJob(
         // A Checkout Session is an at-most-once entitlement. Returning the
         // permanently associated job is safe after refreshes, lost responses,
         // process crashes, and ambiguous provider timeouts. It must never be
-        // submitted again. Official Kling's unique external task id also lets
-        // polling recover an accepted task after a lost submission response.
+        // submitted again.
         return { ok: true, job: existing, shouldSubmit: false } as const;
       }
 
@@ -554,6 +534,24 @@ export async function reserveGenerationJob(
         .values({ ...job, imageSequence })
         .returning();
       return { ok: true, job: created, shouldSubmit: true } as const;
+    }
+
+    const [subscription] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, job.userId))
+      .limit(1);
+    const active =
+      subscription &&
+      (subscription.status === "active" ||
+        subscription.status === "trialing") &&
+      (!subscription.currentPeriodEnd ||
+        subscription.currentPeriodEnd.getTime() >=
+          Date.now() - 24 * 3600 * 1000);
+    if (!active) return { ok: false, reason: "inactive" } as const;
+    // Non-add-on generations require an exact recognized recurring price.
+    if (!billingEntitlement) {
+      return { ok: false, reason: "period_unavailable" } as const;
     }
 
     // Versioned prices enforce the immutable allowance classified from Stripe.
@@ -597,6 +595,25 @@ export async function reserveGenerationJob(
       .returning();
     return { ok: true, job: created, shouldSubmit: true } as const;
   });
+}
+
+export async function getGenerationJobByAdditionalCheckoutSession(
+  additionalCheckoutSessionId: string,
+  userId: number
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [job] = await db
+    .select()
+    .from(generationJobs)
+    .where(
+      and(
+        eq(generationJobs.userId, userId),
+        sql`${generationJobs.imageSequence}::jsonb ->> 'additionalCheckoutSessionId' = ${additionalCheckoutSessionId}`
+      )
+    )
+    .limit(1);
+  return job;
 }
 
 export async function getGenerationJob(jobId: number, userId: number) {

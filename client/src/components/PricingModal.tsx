@@ -70,22 +70,18 @@ export default function PricingModal({
           subscribed={subscribed}
           additionalVideoPriceUsd={additionalVideoPriceUsd}
           actionLabel={
-            subscribed ? "Buy additional video" : "Choose a plan above"
+            subscribed ? "Buy additional video" : "Buy one video · $17"
           }
           onAction={() => {
-            if (subscribed && onBuyAdditionalVideo) {
+            if (onBuyAdditionalVideo) {
               onOpenChange(false);
               onBuyAdditionalVideo();
-              return;
             }
-            document
-              .querySelector('[aria-label="Promotional offer countdown"]')
-              ?.scrollIntoView({ behavior: "smooth", block: "center" });
           }}
         />
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          Secure checkout by Stripe · Subscriptions renew automatically · Cancel
-          anytime
+          Secure checkout by Stripe · One-video purchases do not renew ·
+          Subscriptions can be cancelled anytime
         </p>
       </DialogContent>
     </Dialog>

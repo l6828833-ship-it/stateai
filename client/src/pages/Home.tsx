@@ -853,11 +853,24 @@ export default function Home() {
           />
           <PayAsYouGoCard
             className="reveal-on-scroll mx-auto mt-6 max-w-6xl"
-            onAction={() =>
-              navigate(isAuthenticated ? "/dashboard" : "/signup")
-            }
+            deferRateToDashboard={isAuthenticated}
+            onAction={() => {
+              if (!isAuthenticated) {
+                try {
+                  localStorage.setItem(
+                    "estatetour_buy_one_video_after_auth",
+                    "true"
+                  );
+                } catch {}
+                navigate("/signup");
+                return;
+              }
+              navigate("/dashboard");
+            }}
             actionLabel={
-              isAuthenticated ? "Open dashboard" : "Create an account"
+              isAuthenticated
+                ? "View your rate in Dashboard"
+                : "Sign up and buy · $17"
             }
           />
         </div>
