@@ -12,6 +12,8 @@ import {
   History,
   Home,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
   Sparkles,
   X,
@@ -31,6 +33,8 @@ interface DashboardSidebarProps {
   onBuyAdditionalVideo?: () => void;
   onBillingClick?: () => void;
   additionalVideoPriceUsd?: number;
+  desktopCollapsed?: boolean;
+  onToggleDesktop?: () => void;
 }
 
 export default function DashboardSidebar({
@@ -44,6 +48,8 @@ export default function DashboardSidebar({
   onBuyAdditionalVideo,
   onBillingClick,
   additionalVideoPriceUsd,
+  desktopCollapsed = false,
+  onToggleDesktop,
 }: DashboardSidebarProps) {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
@@ -98,7 +104,8 @@ export default function DashboardSidebar({
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-white/10 bg-zinc-950 text-white shadow-2xl shadow-black/15 transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col overflow-x-hidden border-r border-white/10 bg-zinc-950 text-white shadow-2xl shadow-black/15 transition-[width,transform] duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
+          desktopCollapsed ? "lg:w-0 lg:border-r-0" : "lg:w-72",
           isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -111,17 +118,42 @@ export default function DashboardSidebar({
         />
 
         {/* Header */}
-        <div className="relative flex h-16 items-center justify-between px-5">
+        <div
+          className={cn(
+            "relative flex h-16 shrink-0 items-center px-5",
+            desktopCollapsed
+              ? "justify-between lg:justify-center lg:px-2"
+              : "justify-between"
+          )}
+        >
           <a
             href="/"
             className="flex items-center gap-2 font-display text-lg text-white"
+            title="EstateTour home"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm">
               <Clapperboard className="h-4 w-4" />
             </span>
-            EstateTour
+            <span className={cn(desktopCollapsed && "lg:hidden")}>EstateTour</span>
           </a>
           <button
+            type="button"
+            onClick={onToggleDesktop}
+            className={cn(
+              "hidden rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:inline-flex",
+              desktopCollapsed && "absolute -right-3 top-5 z-10 border border-white/10 bg-zinc-950 shadow-lg"
+            )}
+            aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {desktopCollapsed ? (
+              <PanelLeftOpen className="h-5 w-5" />
+            ) : (
+              <PanelLeftClose className="h-5 w-5" />
+            )}
+          </button>
+          <button
+            type="button"
             onClick={onClose}
             className="rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
           >
@@ -130,13 +162,24 @@ export default function DashboardSidebar({
           </button>
         </div>
 
-        <div className="relative flex-1 overflow-y-auto px-4 pb-4">
+        <div
+          className={cn(
+            "relative flex-1 overflow-y-auto pb-4",
+            desktopCollapsed ? "px-4 lg:px-2" : "px-4"
+          )}
+        >
           {/* User Profile */}
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+          <div
+            className={cn(
+              "flex items-center rounded-2xl border border-white/10 bg-white/5 p-3",
+              desktopCollapsed ? "gap-3 lg:justify-center lg:p-2" : "gap-3"
+            )}
+            title={desktopCollapsed ? (user?.name ?? "User") : undefined}
+          >
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-zinc-950">
               {user?.name?.charAt(0).toUpperCase() ?? "U"}
             </div>
-            <div className="min-w-0 flex-1">
+            <div className={cn("min-w-0 flex-1", desktopCollapsed && "lg:hidden")}>
               <p className="truncate text-sm font-medium text-white">
                 {user?.name ?? "User"}
               </p>
@@ -147,7 +190,12 @@ export default function DashboardSidebar({
           </div>
 
           {/* Navigation */}
-          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          <p
+            className={cn(
+              "mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50",
+              desktopCollapsed && "lg:hidden"
+            )}
+          >
             Menu
           </p>
           <nav className="space-y-1">
@@ -161,8 +209,11 @@ export default function DashboardSidebar({
                     onClose?.();
                   }}
                   aria-current={active ? "page" : undefined}
+                  aria-label={item.label}
+                  title={desktopCollapsed ? item.label : undefined}
                   className={cn(
-                    "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
+                    "group flex w-full items-center rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
+                    desktopCollapsed ? "gap-3 lg:justify-center lg:px-2" : "gap-3",
                     active
                       ? "bg-white text-zinc-950 shadow-sm"
                       : "text-white/55 hover:bg-white/10 hover:text-white"
@@ -174,9 +225,16 @@ export default function DashboardSidebar({
                       active && "text-zinc-950"
                     )}
                   />
-                  <span>{item.label}</span>
+                  <span className={cn(desktopCollapsed && "lg:hidden")}>
+                    {item.label}
+                  </span>
                   {active && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-zinc-950" />
+                    <span
+                      className={cn(
+                        "ml-auto h-1.5 w-1.5 rounded-full bg-zinc-950",
+                        desktopCollapsed && "lg:hidden"
+                      )}
+                    />
                   )}
                 </button>
               );
@@ -184,19 +242,32 @@ export default function DashboardSidebar({
             {user?.role === "admin" && (
               <button
                 onClick={() => navigate("/admin")}
-                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/55 transition-all hover:bg-white/10 hover:text-white"
+                aria-label="Admin Console"
+                title={desktopCollapsed ? "Admin Console" : undefined}
+                className={cn(
+                  "group flex w-full items-center rounded-xl px-3 py-2.5 text-sm font-medium text-white/55 transition-all hover:bg-white/10 hover:text-white",
+                  desktopCollapsed ? "gap-3 lg:justify-center lg:px-2" : "gap-3"
+                )}
               >
                 <ShieldCheck className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
-                <span>Admin Console</span>
-                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-bold uppercase text-white/70 group-hover:bg-white group-hover:text-zinc-950">
+                <span className={cn(desktopCollapsed && "lg:hidden")}>
+                  Admin Console
+                </span>
+                <span
+                  className={cn(
+                    "ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-bold uppercase text-white/70 group-hover:bg-white group-hover:text-zinc-950",
+                    desktopCollapsed && "lg:hidden"
+                  )}
+                >
                   Admin
                 </span>
               </button>
             )}
           </nav>
 
-          {/* Quick Stats */}
-          <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          <div className={cn(desktopCollapsed && "lg:hidden")}>
+            {/* Quick Stats */}
+            <p className="mb-2 mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Quick stats
           </p>
           <div className="grid grid-cols-3 gap-2">
@@ -239,7 +310,7 @@ export default function DashboardSidebar({
             <p className="mb-3 text-xs text-white/50">
               {subscribed
                 ? "Cinematic 1080p generations without watermarks."
-                : "Upgrade for cinematic 1080p tours without watermarks."}
+                : "Buy one Starter-feature video for $17, or choose a plan."}
             </p>
             {subscribed ? (
               <div className="space-y-2">
@@ -263,26 +334,50 @@ export default function DashboardSidebar({
                 </Button>
               </div>
             ) : (
-              <Button
-                size="sm"
-                className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
-                onClick={onUpgradeClick}
-              >
-                <Crown className="mr-1.5 h-3.5 w-3.5" /> Upgrade plan
-              </Button>
+              <div className="space-y-2">
+                <Button
+                  size="sm"
+                  className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
+                  onClick={onBuyAdditionalVideo}
+                >
+                  <Zap className="mr-1.5 h-3.5 w-3.5" /> One video · $17
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                  onClick={onUpgradeClick}
+                >
+                  <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
+                </Button>
+              </div>
             )}
+          </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="relative border-t border-white/10 p-4">
+        <div
+          className={cn(
+            "relative shrink-0 border-t border-white/10 p-4",
+            desktopCollapsed && "lg:px-2"
+          )}
+        >
           <Button
             variant="ghost"
             size="sm"
-            className="btn-springy w-full justify-start text-white/55 hover:bg-white/10 hover:text-white"
+            aria-label="Sign out"
+            title={desktopCollapsed ? "Sign out" : undefined}
+            className={cn(
+              "btn-springy w-full text-white/55 hover:bg-white/10 hover:text-white",
+              desktopCollapsed ? "justify-start lg:justify-center lg:px-2" : "justify-start"
+            )}
             onClick={handleLogout}
           >
-            <LogOut className="mr-2 h-4 w-4" /> Sign out
+            <LogOut
+              className={cn("h-4 w-4", desktopCollapsed ? "lg:mr-0" : "mr-2")}
+            />
+            <span className={cn(desktopCollapsed && "lg:hidden")}>Sign out</span>
           </Button>
         </div>
       </aside>

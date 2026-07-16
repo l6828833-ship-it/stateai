@@ -723,36 +723,31 @@ export async function handleAdditionalVideoCheckout(
   try {
     const subscription = await db.getSubscription(user.id);
     const entitlement = await getStripeGenerationEntitlement(user.id);
-    if (
-      !(await db.hasActiveSubscription(user.id)) ||
-      !subscription ||
-      !entitlement
-    ) {
-      res.status(403).json({ error: "A recognized active plan is required" });
-      return;
-    }
+    const standalone = !entitlement;
+    const additionalVideoPriceUsd =
+      entitlement?.additionalVideoPriceUsd ?? ADDITIONAL_VIDEO_PRICE_USD;
 
     const stripe = getStripe();
-    const priceId = await ensureAdditionalVideoPrice(
-      entitlement.additionalVideoPriceUsd
-    );
+    const priceId = await ensureAdditionalVideoPrice(additionalVideoPriceUsd);
     const origin = getOrigin(req);
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{ price: priceId, quantity: 1 }],
       client_reference_id: user.id.toString(),
-      customer: subscription.stripeCustomerId || undefined,
-      customer_email: subscription.stripeCustomerId
+      customer: subscription?.stripeCustomerId || undefined,
+      customer_email: subscription?.stripeCustomerId
         ? undefined
         : (user.email ?? undefined),
       metadata: {
         user_id: user.id.toString(),
         purchase_type: "additional_video",
+        purchase_scope: standalone ? "standalone_starter" : "plan_add_on",
       },
       payment_intent_data: {
         metadata: {
           user_id: user.id.toString(),
           purchase_type: "additional_video",
+          purchase_scope: standalone ? "standalone_starter" : "plan_add_on",
         },
       },
       success_url: `${origin}/dashboard?additional_video=success&session_id={CHECKOUT_SESSION_ID}`,
@@ -805,12 +800,26 @@ export async function getStripeGenerationEntitlement(
   };
 }
 
-/** Verify an exact paid v4 tier, v3 $17, or legacy $15 add-on checkout. */
+export type AdditionalVideoPurchaseScope =
+  | "standalone_starter"
+  | "plan_add_on"
+  | "legacy_plan_add_on";
+
+export type VerifiedAdditionalVideoPurchase = {
+  amountCents: number;
+  scope: AdditionalVideoPurchaseScope;
+};
+
+/**
+ * Verify a paid one-video checkout and preserve the purchase contract that was
+ * established when Stripe created it. Legacy sessions predate purchase_scope
+ * and are treated only as plan add-ons by the generation authorization layer.
+ */
 export async function verifyAdditionalVideoCheckout(
   sessionId: string,
   userId: number
-): Promise<boolean> {
-  if (!sessionId.startsWith("cs_")) return false;
+): Promise<VerifiedAdditionalVideoPurchase | null> {
+  if (!sessionId.startsWith("cs_")) return null;
 
   const stripe = getStripe();
   const [session, lineItems] = await Promise.all([
@@ -825,18 +834,39 @@ export async function verifyAdditionalVideoCheckout(
   const recognizedAmount = itemPrice
     ? recognizedAdditionalVideoAmount(itemPrice)
     : null;
+  const metadataScope = session.metadata?.purchase_scope;
+  const scope: AdditionalVideoPurchaseScope | null =
+    metadataScope === "standalone_starter" || metadataScope === "plan_add_on"
+      ? metadataScope
+      : metadataScope === undefined
+        ? "legacy_plan_add_on"
+        : null;
 
-  return (
-    recognizedAmount !== null &&
-    session.mode === "payment" &&
-    session.payment_status === "paid" &&
-    session.currency === "usd" &&
-    session.amount_total === recognizedAmount &&
-    lineItems.data.length === 1 &&
-    item?.quantity === 1 &&
-    session.metadata?.purchase_type === "additional_video" &&
-    session.metadata?.user_id === userId.toString()
-  );
+  if (
+    recognizedAmount === null ||
+    scope === null ||
+    session.mode !== "payment" ||
+    session.payment_status !== "paid" ||
+    session.currency !== "usd" ||
+    session.amount_total !== recognizedAmount ||
+    lineItems.data.length !== 1 ||
+    item?.quantity !== 1 ||
+    session.metadata?.purchase_type !== "additional_video" ||
+    session.metadata?.user_id !== userId.toString()
+  ) {
+    return null;
+  }
+
+  // A standalone purchase is a distinct $17 product contract. Lower-priced
+  // plan add-ons must never become standalone credits after cancellation.
+  if (
+    scope === "standalone_starter" &&
+    recognizedAmount !== ADDITIONAL_VIDEO_PRICE_USD * 100
+  ) {
+    return null;
+  }
+
+  return { amountCents: recognizedAmount, scope };
 }
 
 /** POST /api/billing/portal — opens the Stripe billing portal. */

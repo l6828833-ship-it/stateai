@@ -1,4 +1,4 @@
-import { Clapperboard, Sparkles, Zap } from "lucide-react";
+import { Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { planForStoredId } from "@shared/plans";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ interface PayAsYouGoCardProps {
   actionLabel?: string;
   className?: string;
   compact?: boolean;
+  deferRateToDashboard?: boolean;
 }
 
 export default function PayAsYouGoCard({
@@ -27,9 +28,14 @@ export default function PayAsYouGoCard({
   actionLabel,
   className,
   compact = false,
+  deferRateToDashboard = false,
 }: PayAsYouGoCardProps) {
   const plan = planForStoredId(currentPlan);
-  const currentRate = additionalVideoPriceUsd;
+  const currentRate = deferRateToDashboard
+    ? undefined
+    : subscribed
+      ? additionalVideoPriceUsd
+      : 17;
 
   return (
     <section
@@ -49,43 +55,47 @@ export default function PayAsYouGoCard({
             Need one more listing video?
           </h3>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-white/55">
-            Keep your plan and add a single video whenever volume spikes. Your
-            tier automatically gets its lower additional-video rate.
+            No subscription required. Buy one 1080p video with Starter features:
+            up to 6 images, 15 seconds, every aspect ratio, and no watermark.
+            Active plans automatically receive their lower add-on rate.
           </p>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {TIER_RATES.map(rate => {
-              const active = plan?.tier === rate.tier;
-              return (
-                <span
-                  key={rate.tier}
-                  className={cn(
-                    "rounded-xl border px-3 py-2 text-xs",
-                    active
-                      ? "border-white bg-white font-semibold text-zinc-950"
-                      : "border-white/10 bg-white/5 text-white/65"
-                  )}
-                >
-                  {rate.label} · ${rate.price}/video
-                  {active && " · your rate"}
-                </span>
-              );
-            })}
-          </div>
+          {!deferRateToDashboard && (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {TIER_RATES.map(rate => {
+                const active =
+                  plan?.tier === rate.tier ||
+                  (!subscribed && rate.tier === "starter");
+                return (
+                  <span
+                    key={rate.tier}
+                    className={cn(
+                      "rounded-xl border px-3 py-2 text-xs",
+                      active
+                        ? "border-white bg-white font-semibold text-zinc-950"
+                        : "border-white/10 bg-white/5 text-white/65"
+                    )}
+                  >
+                    {rate.label} · ${rate.price}/video
+                    {active &&
+                      (subscribed ? " · your rate" : " · no-plan rate")}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div className="relative lg:text-right">
-          {subscribed ? (
-            currentRate ? (
-              <p className="mb-3 text-sm text-white/60">
-                Your price:{" "}
-                <strong className="text-xl text-white">${currentRate}</strong>
-              </p>
-            ) : (
-              <p className="mb-3 text-sm text-white/60">
-                Your exact tier rate loads securely at checkout.
-              </p>
-            )
+          {currentRate ? (
+            <p className="mb-3 text-sm text-white/60">
+              {subscribed ? "Your price" : "One video"}:{" "}
+              <strong className="text-xl text-white">${currentRate}</strong>
+            </p>
           ) : (
-            <Clapperboard className="mb-3 h-7 w-7 text-white/60 lg:ml-auto" />
+            <p className="mb-3 text-sm text-white/60">
+              {deferRateToDashboard
+                ? "See your exact subscription or no-plan rate in Dashboard."
+                : "Your exact tier rate loads securely at checkout."}
+            </p>
           )}
           <Button
             type="button"
@@ -94,7 +104,7 @@ export default function PayAsYouGoCard({
           >
             <Sparkles className="mr-2 h-4 w-4" />
             {actionLabel ??
-              (subscribed ? "Buy additional video" : "Choose a plan")}
+              (subscribed ? "Buy additional video" : "Buy one video · $17")}
           </Button>
         </div>
       </div>

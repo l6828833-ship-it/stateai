@@ -32,9 +32,10 @@ import {
   Download,
   Film,
   History,
-  ImagePlus,
   Loader2,
   Menu,
+  PanelLeftOpen,
+  Play,
   RefreshCw,
   Sparkles,
   TrendingUp,
@@ -48,6 +49,10 @@ type DashSection = "overview" | "create" | "videos" | "analytics";
 type PendingAdditionalVideo = { sessionId: string; jobId?: number };
 
 const PENDING_ADDITIONAL_VIDEO_KEY = "estatetour_pending_additional_video";
+const BUY_ONE_VIDEO_AFTER_AUTH_KEY =
+  "estatetour_buy_one_video_after_auth";
+const DASHBOARD_SIDEBAR_COLLAPSED_KEY =
+  "estatetour_dashboard_sidebar_collapsed";
 const RETRYABLE_QUERY_CODES = new Set([
   "INTERNAL_SERVER_ERROR",
   "TIMEOUT",
@@ -64,6 +69,15 @@ function isRetryableStudioError(error: unknown): boolean {
 
 function shouldRetryStudioQuery(failureCount: number, error: unknown): boolean {
   return failureCount < 6 && isRetryableStudioError(error);
+}
+
+function loadSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(DASHBOARD_SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 function loadPendingAdditionalVideo(): PendingAdditionalVideo | null {
@@ -162,11 +176,11 @@ export default function Dashboard() {
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [draftSyncing, setDraftSyncing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [quickUploadDragOver, setQuickUploadDragOver] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] =
+    useState(loadSidebarCollapsed);
   const [activeSection, setActiveSection] =
     useState<DashSection>("overview");
   const draftSyncedRef = useRef(false);
-  const quickUploadInputRef = useRef<HTMLInputElement>(null);
   const pricingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stateQuery = trpc.tour.getState.useQuery(undefined, {
@@ -267,6 +281,17 @@ export default function Dashboard() {
       // The paid session remains server-verifiable even if storage is blocked.
     }
   }, [pendingAdditionalVideo]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DASHBOARD_SIDEBAR_COLLAPSED_KEY,
+        String(sidebarCollapsed)
+      );
+    } catch {
+      // Sidebar state can remain session-only when storage is blocked.
+    }
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -446,40 +471,6 @@ export default function Dashboard() {
     await utils.tour.getState.invalidate();
   };
 
-  const handleQuickFiles = async (fileList: FileList | File[]) => {
-    if (planEntitlementPending) {
-      toast.error("Your plan limits are still loading. Please try again.");
-      void entitlementQuery.refetch();
-      return;
-    }
-    const files = Array.from(fileList).filter(file =>
-      ["image/jpeg", "image/png", "image/webp"].includes(file.type)
-    );
-    if (files.length === 0) {
-      toast.error("Please upload JPG, PNG, or WebP photos");
-      return;
-    }
-    const room = maxImages - serverImages.length;
-    if (room <= 0) {
-      toast.error(`Maximum ${maxImages} photos per tour`);
-      handleCreateClick();
-      return;
-    }
-    if (files.length > room) {
-      toast.warning(
-        `Only ${room} more photo${room === 1 ? "" : "s"} can be added`
-      );
-    }
-
-    setActiveSection("create");
-    await handleFilesAdded(files.slice(0, room));
-    window.requestAnimationFrame(() => {
-      document
-        .getElementById("tour-tool")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  };
-
   const handleReorder = (orderedIds: Array<string | number>) => {
     if (!project) return;
     const ids = orderedIds.map(id => Number(id));
@@ -527,6 +518,15 @@ export default function Dashboard() {
     });
   }, []);
 
+  const handleViewJob = useCallback(
+    (jobId: number) => {
+      setActiveJobId(jobId);
+      setTheaterMode("real");
+      revealOutputTheater();
+    },
+    [revealOutputTheater]
+  );
+
   const handleGenerate = useCallback(async () => {
     if (!project) return;
     setActiveSection("create");
@@ -537,27 +537,16 @@ export default function Dashboard() {
       return;
     }
 
-    if (!state?.subscribed) {
-      // Keep the completed locked preview stable. Repeated clicks reopen pricing
-      // instead of replaying the animation or exposing a stale real video.
-      if (theaterMode === "fake" && fakePreviewComplete) {
-        handleOpenPricing();
-        return;
-      }
-      if (theaterMode === "fake") return;
-
-      if (pricingTimerRef.current) {
-        clearTimeout(pricingTimerRef.current);
-        pricingTimerRef.current = null;
-      }
-      setFakePreviewComplete(false);
-      setActiveJobId(null);
-      setTheaterMode("fake");
-      revealOutputTheater();
+    if (!state?.subscribed && !pendingAdditionalVideo) {
+      setTheaterMode("idle");
+      toast.info(
+        "Choose a plan or buy one $17 pay-as-you-go video to generate."
+      );
+      handleOpenPricing();
       return;
     }
 
-    // SUBSCRIBER: real, costly generation.
+    // A subscription or verified one-time purchase starts real generation.
     try {
       setTheaterMode("real");
       revealOutputTheater();
@@ -592,11 +581,10 @@ export default function Dashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    fakePreviewComplete,
+    handleOpenPricing,
     pendingAdditionalVideo,
     project?.id,
     revealOutputTheater,
-    theaterMode,
   ]);
 
   const handleGenerateRef = useRef<typeof handleGenerate | null>(null);
@@ -644,7 +632,7 @@ export default function Dashboard() {
 
   const handleBuyAdditionalVideo = async () => {
     if (pendingAdditionalVideo) {
-      toast.info("Use your pending additional video before buying another one");
+      toast.info("Use your pending one-video purchase before buying another one");
       return;
     }
     try {
@@ -661,6 +649,21 @@ export default function Dashboard() {
       toast.error("Could not start additional-video checkout");
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      if (localStorage.getItem(BUY_ONE_VIDEO_AFTER_AUTH_KEY) !== "true") {
+        return;
+      }
+      localStorage.removeItem(BUY_ONE_VIDEO_AFTER_AUTH_KEY);
+      void handleBuyAdditionalVideo();
+    } catch {
+      // The dashboard pay-as-you-go button remains available as a fallback.
+    }
+    // Consume the one-time post-sign-up intent once authentication is ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const handleOpenBillingPortal = async () => {
     try {
@@ -842,27 +845,37 @@ export default function Dashboard() {
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
                 {job.status === "ready" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
-                    onClick={() =>
-                      subscribed ? handleDownload(job.id) : handleOpenPricing()
-                    }
-                  >
-                    <Download className="mr-1 h-3 w-3" /> Get
-                  </Button>
+                  <>
+                    {(subscribed || job.additionalVideo) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="btn-springy h-7 rounded-full px-2.5 text-xs"
+                        onClick={() => handleViewJob(job.id)}
+                      >
+                        <Play className="mr-1 h-3 w-3" /> Play
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="btn-springy h-7 rounded-full bg-card px-2.5 text-xs"
+                      onClick={() =>
+                        subscribed || job.additionalVideo
+                          ? handleDownload(job.id)
+                          : handleOpenPricing()
+                      }
+                    >
+                      <Download className="mr-1 h-3 w-3" /> Get
+                    </Button>
+                  </>
                 )}
                 {job.status === "processing" && (
                   <Button
                     size="sm"
                     variant="ghost"
                     className="btn-springy h-7 rounded-full px-2.5 text-xs"
-                    onClick={() => {
-                      setActiveJobId(job.id);
-                      setTheaterMode("real");
-                      setActiveSection("create");
-                    }}
+                    onClick={() => handleViewJob(job.id)}
                   >
                     <RefreshCw className="mr-1 h-3 w-3" /> View
                   </Button>
@@ -901,7 +914,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="relative flex min-h-screen bg-background">
+    <div className="relative flex min-h-screen max-w-full overflow-x-hidden bg-background">
       {/* ===== Sidebar (persistent on desktop, drawer on mobile) ===== */}
       <DashboardSidebar
         isOpen={sidebarOpen}
@@ -914,10 +927,12 @@ export default function Dashboard() {
         onBuyAdditionalVideo={handleBuyAdditionalVideo}
         onBillingClick={handleOpenBillingPortal}
         additionalVideoPriceUsd={additionalVideoPriceUsd}
+        desktopCollapsed={sidebarCollapsed}
+        onToggleDesktop={() => setSidebarCollapsed(value => !value)}
       />
 
       {/* ===== Main column ===== */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex w-full min-w-0 max-w-full flex-1 flex-col overflow-x-hidden">
         {/* Mobile top bar */}
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-200 bg-white/90 px-3 backdrop-blur-xl lg:hidden">
           <button
@@ -952,16 +967,31 @@ export default function Dashboard() {
           )}
         </header>
 
-        <main className="flex-1 px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">
+        <main className="min-w-0 max-w-full flex-1 overflow-x-hidden px-4 pb-28 pt-6 sm:px-6 lg:px-8 lg:pb-12 lg:pt-8 xl:px-10">
           {/* Section header */}
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="font-display text-2xl text-foreground sm:text-3xl">
-                {sectionTitle}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {sectionSubtitle}
-              </p>
+            <div className="flex min-w-0 items-center gap-3">
+              {sidebarCollapsed && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="hidden shrink-0 rounded-xl lg:inline-flex"
+                  onClick={() => setSidebarCollapsed(false)}
+                  aria-label="Open sidebar"
+                  title="Open sidebar"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </Button>
+              )}
+              <div className="min-w-0">
+                <h1 className="truncate font-display text-2xl text-foreground sm:text-3xl">
+                  {sectionTitle}
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {sectionSubtitle}
+                </p>
+              </div>
             </div>
             {/* Desktop plan actions */}
             <div className="hidden items-center gap-2 lg:flex">
@@ -1057,77 +1087,56 @@ export default function Dashboard() {
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)]">
-                <section className="glass-panel rounded-3xl p-6 sm:p-8">
+                <section className="glass-panel min-w-0 rounded-3xl p-5 sm:p-7">
                   <span className="inline-flex items-center gap-2 rounded-full bg-zinc-950 px-3 py-1 text-xs font-medium text-white">
-                    <Sparkles className="h-3.5 w-3.5" /> Current project
+                    <Sparkles className="h-3.5 w-3.5" /> Build your tour
                   </span>
-                  <h2 className="mt-5 font-display text-2xl text-foreground">
-                    Continue building your property tour
+                  <h2 className="mt-4 font-display text-2xl text-foreground">
+                    Upload, arrange, and generate
                   </h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                    Your project has {serverImages.length} photo
-                    {serverImages.length === 1 ? "" : "s"}. Add more images,
-                    arrange the sequence, and generate your next video.
+                    Complete the setup here. The output section stays hidden until
+                    you click Generate, then Create Tour opens automatically.
                   </p>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Quick upload property photos"
-                    onClick={() => quickUploadInputRef.current?.click()}
-                    onKeyDown={event => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        quickUploadInputRef.current?.click();
-                      }
-                    }}
-                    onDragOver={event => {
-                      event.preventDefault();
-                      setQuickUploadDragOver(true);
-                    }}
-                    onDragLeave={() => setQuickUploadDragOver(false)}
-                    onDrop={event => {
-                      event.preventDefault();
-                      setQuickUploadDragOver(false);
-                      void handleQuickFiles(event.dataTransfer.files);
-                    }}
-                    className={cn(
-                      "mt-6 cursor-pointer rounded-2xl border-2 border-dashed p-5 text-center transition-all",
-                      quickUploadDragOver
-                        ? "border-zinc-950 bg-zinc-100"
-                        : "border-zinc-300 bg-white/65 hover:border-zinc-500 hover:bg-white"
+                  <div className="mt-6 min-w-0">
+                    {planEntitlementPending ? (
+                      <div className="flex min-h-64 flex-col items-center justify-center text-center">
+                        {planEntitlementUnavailable ? (
+                          <RefreshCw className="h-7 w-7 text-muted-foreground" />
+                        ) : (
+                          <Loader2 className="h-7 w-7 animate-spin text-primary" />
+                        )}
+                        <p className="mt-3 text-sm text-muted-foreground">
+                          Verifying your plan limits…
+                        </p>
+                        {planEntitlementUnavailable && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="btn-springy mt-4 rounded-full"
+                            onClick={() => void entitlementQuery.refetch()}
+                          >
+                            <RefreshCw className="mr-2 h-4 w-4" /> Try again
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <TourTool
+                        images={toolImages}
+                        settings={settings}
+                        onFilesAdded={handleFilesAdded}
+                        onReorder={handleReorder}
+                        onDelete={handleDelete}
+                        onSettingsChange={handleSettingsChange}
+                        onGenerate={handleGenerate}
+                        generateLabel="Generate Tour Video"
+                        maxImages={maxImages}
+                        maxDurationSeconds={maxDurationSeconds}
+                        generating={generateMutation.isPending}
+                        disabled={draftSyncing}
+                      />
                     )}
-                  >
-                    <input
-                      ref={quickUploadInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      multiple
-                      className="hidden"
-                      onChange={event => {
-                        if (event.target.files) {
-                          void handleQuickFiles(event.target.files);
-                        }
-                        event.target.value = "";
-                      }}
-                    />
-                    <ImagePlus className="mx-auto h-6 w-6 text-zinc-700" />
-                    <p className="mt-2 text-sm font-semibold text-foreground">
-                      Drop images here or click to upload
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {planEntitlementPending
-                        ? "Plan upload limit is loading securely"
-                        : `Up to ${maxImages} photos · uploads open in Create Tour`}
-                    </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="btn-springy mt-3 rounded-full px-4"
-                    onClick={handleCreateClick}
-                  >
-                    <Clapperboard className="mr-2 h-4 w-4" /> Open tour builder
-                  </Button>
                 </section>
 
                 <section>
@@ -1152,16 +1161,20 @@ export default function Dashboard() {
                 currentPlan={currentPlan}
                 subscribed={subscribed}
                 additionalVideoPriceUsd={additionalVideoPriceUsd}
-                onAction={
-                  subscribed ? handleBuyAdditionalVideo : handleOpenPricing
-                }
+                onAction={handleBuyAdditionalVideo}
               />
             </div>
           )}
 
           {/* ===== CREATE SECTION ===== */}
           {activeSection === "create" && (
-            <div className="grid gap-8 xl:grid-cols-[1fr_minmax(20rem,26rem)]">
+            <div
+              className={cn(
+                "grid min-w-0 gap-8",
+                theaterMode !== "idle" &&
+                  "xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]"
+              )}
+            >
               <section
                 id="tour-tool"
                 className="glass-panel rounded-3xl border-zinc-200 bg-white p-6 sm:p-8"
@@ -1213,48 +1226,41 @@ export default function Dashboard() {
                 )}
               </section>
 
-              <div className="space-y-6">
+              {theaterMode !== "idle" && (
+                <div className="min-w-0 space-y-6">
                 {/* Output theater */}
                 <section id="output-theater">
                   <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
                     <Film className="h-4 w-4 text-primary" /> Output
                   </h2>
-                  {theaterMode === "idle" ? (
-                    <div className="flex aspect-video flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-ring/50 bg-card/50 p-6 text-center">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent">
-                        <Clapperboard className="h-5 w-5 text-primary" />
-                      </span>
-                      <p className="text-sm text-muted-foreground">
-                        Your generated tour will appear here
-                      </p>
-                    </div>
-                  ) : (
-                    <GenerationTheater
-                      mode={theaterMode}
-                      previewImageUrl={firstImageUrl}
-                      jobStatus={
-                        theaterMode === "real"
-                          ? ((activeJob?.status ?? "processing") as
-                              | "processing"
-                              | "ready"
-                              | "failed")
-                          : null
-                      }
-                      videoUrl={
-                        theaterMode === "real" && subscribed
-                          ? (activeJob?.videoUrl ?? null)
-                          : null
-                      }
-                      errorMessage={activeJob?.errorMessage ?? null}
-                      onFakeComplete={handleFakeComplete}
-                      fakeComplete={fakePreviewComplete}
-                      canPlayVideo={subscribed}
-                      onUnlockClick={handleOpenPricing}
-                      onDownload={() =>
-                        activeJobId && handleDownload(activeJobId)
-                      }
-                    />
-                  )}
+                  <GenerationTheater
+                    mode={theaterMode}
+                    previewImageUrl={firstImageUrl}
+                    jobStatus={
+                      theaterMode === "real"
+                        ? ((activeJob?.status ?? "processing") as
+                            | "processing"
+                            | "ready"
+                            | "failed")
+                        : null
+                    }
+                    videoUrl={
+                      theaterMode === "real" &&
+                      (subscribed || activeJob?.additionalVideo)
+                        ? (activeJob?.videoUrl ?? null)
+                        : null
+                    }
+                    errorMessage={activeJob?.errorMessage ?? null}
+                    onFakeComplete={handleFakeComplete}
+                    fakeComplete={fakePreviewComplete}
+                    canPlayVideo={
+                      subscribed || Boolean(activeJob?.additionalVideo)
+                    }
+                    onUnlockClick={handleOpenPricing}
+                    onDownload={() =>
+                      activeJobId && handleDownload(activeJobId)
+                    }
+                  />
                 </section>
 
                 {/* Recent videos preview */}
@@ -1275,7 +1281,8 @@ export default function Dashboard() {
                   </div>
                   <HistoryList limit={3} />
                 </section>
-              </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1330,7 +1337,7 @@ export default function Dashboard() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {subscribed
                     ? "Your paid plan includes cinematic 1080p generations without watermarks."
-                    : "You're on the free plan. Upgrade for 1080p cinematic tours without watermarks."}
+                    : "Buy one $17 Starter-feature video without a subscription, or choose a plan for recurring generations."}
                 </p>
                 {subscribed ? (
                   <Button
@@ -1345,13 +1352,24 @@ export default function Dashboard() {
                       : ""}
                   </Button>
                 ) : (
-                  <Button
-                    size="sm"
-                    className="btn-springy mt-4 rounded-full"
-                    onClick={handleOpenPricing}
-                  >
-                    <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
-                  </Button>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      className="btn-springy rounded-full"
+                      onClick={handleBuyAdditionalVideo}
+                    >
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" /> One video ·
+                      $17
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="btn-springy rounded-full"
+                      onClick={handleOpenPricing}
+                    >
+                      <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
+                    </Button>
+                  </div>
                 )}
                 <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">

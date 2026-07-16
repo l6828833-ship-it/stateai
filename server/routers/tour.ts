@@ -208,6 +208,16 @@ function isAdditionalVideoJob(imageSequence: string | null): boolean {
   }
 }
 
+async function canAccessJobMedia(
+  userId: number,
+  job: GenerationJob
+): Promise<boolean> {
+  return (
+    isAdditionalVideoJob(job.imageSequence) ||
+    (await db.hasActiveSubscription(userId))
+  );
+}
+
 export function toClientJob(job: GenerationJob) {
   const {
     optimizedPrompt,
@@ -279,6 +289,19 @@ const DEFAULT_PLAN_LIMITS = {
   maxDurationSeconds: 15,
   additionalVideoPriceUsd: 17,
 };
+
+function standaloneVideoEntitlement(): GenerationEntitlement {
+  const now = new Date();
+  return {
+    periodStart: now,
+    periodEnd: now,
+    enforceAllowance: false,
+    includedVideos: 1,
+    maxImages: DEFAULT_PLAN_LIMITS.maxImages,
+    maxDurationSeconds: DEFAULT_PLAN_LIMITS.maxDurationSeconds,
+    additionalVideoPriceUsd: DEFAULT_PLAN_LIMITS.additionalVideoPriceUsd,
+  };
+}
 
 async function resolvePlanLimits(userId: number) {
   const fallback = DEFAULT_PLAN_LIMITS;
@@ -588,12 +611,8 @@ export const tourRouter = router({
     }),
 
   /**
-   * REAL generation — paid subscribers only. This is the ONLY code path that
-   * spends official Kling API credits. Order of operations:
-   *   1. verify active subscription (server-side, non-negotiable)
-   *   2. load images strictly ordered by sequenceIndex, validate gapless
-   *   3. hidden LLM analysis/prompt optimization (never returned to client)
-   *   4. submit an official Kling 3.0 image-to-video task and persist its id
+   * REAL generation — active subscribers or verified one-video buyers only.
+   * This is the ONLY code path that spends official Kling API credits.
    */
   generate: appProcedure
     .input(
@@ -603,12 +622,17 @@ export const tourRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const subscribed = await db.hasActiveSubscription(ctx.user.id);
-      if (!subscribed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "An active subscription is required to generate videos",
-        });
+      // Lost responses and refresh retries must recover the job already bound
+      // to this paid Session without depending on mutable project, plan, or
+      // Stripe state. The lookup remains owner-scoped, and first redemption is
+      // still serialized inside reserveGenerationJob.
+      if (input.additionalCheckoutSessionId) {
+        const existing =
+          await db.getGenerationJobByAdditionalCheckoutSession(
+            input.additionalCheckoutSessionId,
+            ctx.user.id
+          );
+        if (existing) return toClientJobWithMedia(existing, true);
       }
 
       const project = await db.getProjectById(input.projectId, ctx.user.id);
@@ -646,25 +670,68 @@ export const tourRouter = router({
           message: "Upload at least one photo first",
         });
       }
+      let additionalCheckoutSessionId: string | undefined;
+      let additionalPurchase:
+        | Awaited<ReturnType<typeof verifyAdditionalVideoCheckout>>
+        | undefined;
+      if (input.additionalCheckoutSessionId) {
+        try {
+          additionalPurchase = await verifyAdditionalVideoCheckout(
+            input.additionalCheckoutSessionId,
+            ctx.user.id
+          );
+          if (!additionalPurchase) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "The one-video payment could not be verified",
+            });
+          }
+          additionalCheckoutSessionId = input.additionalCheckoutSessionId;
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          console.error(
+            "[Generation] One-video payment verification failed",
+            error
+          );
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "The one-video payment could not be verified",
+          });
+        }
+      }
+
       let billingEntitlement: GenerationEntitlement | undefined;
       try {
         billingEntitlement =
           (await getStripeGenerationEntitlement(ctx.user.id)) ?? undefined;
       } catch (error) {
         console.error(
-          "[Generation] Could not verify Stripe entitlement",
+          "[Generation] Could not verify Stripe subscription entitlement",
           error
         );
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Your plan allowance could not be verified. Please try again.",
-        });
+        if (additionalPurchase?.scope !== "standalone_starter") {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Your plan allowance could not be verified. Please try again.",
+          });
+        }
+      }
+      if (!billingEntitlement && additionalPurchase) {
+        if (additionalPurchase.scope !== "standalone_starter") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "This plan add-on requires an active subscription. Buy a $17 standalone video instead.",
+          });
+        }
+        billingEntitlement = standaloneVideoEntitlement();
       }
       if (!billingEntitlement) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "A recognized active plan is required to generate videos",
+          message:
+            "Choose a plan or buy one pay-as-you-go video before generating",
         });
       }
       if (images.length > billingEntitlement.maxImages) {
@@ -683,33 +750,6 @@ export const tourRouter = router({
             code: "PRECONDITION_FAILED",
             message:
               "Image sequence is inconsistent — please reorder your photos and try again",
-          });
-        }
-      }
-
-      let additionalCheckoutSessionId: string | undefined;
-      if (input.additionalCheckoutSessionId) {
-        try {
-          const paid = await verifyAdditionalVideoCheckout(
-            input.additionalCheckoutSessionId,
-            ctx.user.id
-          );
-          if (!paid) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "The additional-video payment could not be verified",
-            });
-          }
-          additionalCheckoutSessionId = input.additionalCheckoutSessionId;
-        } catch (error) {
-          if (error instanceof TRPCError) throw error;
-          console.error(
-            "[Generation] Additional-video verification failed",
-            error
-          );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "The additional-video payment could not be verified",
           });
         }
       }
@@ -879,7 +919,7 @@ export const tourRouter = router({
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
       if (!job)
         throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
-      const includeVideo = await db.hasActiveSubscription(ctx.user.id);
+      const includeVideo = await canAccessJobMedia(ctx.user.id, job);
       if (job.status !== "processing") {
         return toClientJobWithMedia(job, includeVideo);
       }
@@ -1003,24 +1043,29 @@ export const tourRouter = router({
       db.getSubscriptionAccess(ctx.user.id),
     ]);
     return Promise.all(
-      jobs.map(job => toClientJobWithMedia(job, subscription.subscribed))
+      jobs.map(job =>
+        toClientJobWithMedia(
+          job,
+          subscription.subscribed || isAdditionalVideoJob(job.imageSequence)
+        )
+      )
     );
   }),
 
-  /** Signed download URL for a ready video — subscription required. */
+  /** Signed download URL for a ready subscription or paid one-video job. */
   getDownloadUrl: appProcedure
     .input(z.object({ jobId: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      const subscribed = await db.hasActiveSubscription(ctx.user.id);
-      if (!subscribed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "An active subscription is required to download videos",
-        });
-      }
       const job = await db.getGenerationJob(input.jobId, ctx.user.id);
       if (!job || job.status !== "ready" || !job.videoKey) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Video not ready" });
+      }
+      if (!(await canAccessJobMedia(ctx.user.id, job))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "A subscription or paid one-video purchase is required to download this video",
+        });
       }
       const url = await storageGetSignedUrl(job.videoKey);
       return { url };
