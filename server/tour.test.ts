@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { TOUR_STYLES, MAX_IMAGES } from "../shared/plans";
+import { TOUR_STYLES, MAX_IMAGES, PLAN_BY_ID } from "../shared/plans";
+import { normalizeSegmentDurations } from "./inworld";
 
 describe("tour configuration", () => {
   it("exposes exactly the three required tour styles with exact labels", () => {
     expect([...TOUR_STYLES]).toEqual(["Walkthrough", "Drone", "Cinematic"]);
   });
 
-  it("caps uploads at the six images promised by every plan", () => {
+  it("keeps guests at six images and exposes tier-specific paid limits", () => {
     expect(MAX_IMAGES).toBe(6);
+    expect(PLAN_BY_ID.starter_monthly.maxImages).toBe(6);
+    expect(PLAN_BY_ID.creator_monthly.maxImages).toBe(12);
+    expect(PLAN_BY_ID.studio_monthly.maxImages).toBe(17);
+  });
+
+  it("keeps every provider segment valid when final editing must shorten it", () => {
+    const premiumSegments = normalizeSegmentDurations(
+      Array.from({ length: 16 }, () => 6),
+      16,
+      30
+    );
+    expect(premiumSegments).toHaveLength(16);
+    expect(premiumSegments.every(duration => duration >= 3)).toBe(true);
+    // Kling's 16 valid source segments cannot fit 30 seconds natively; ffmpeg
+    // applies the final cap without dropping any segment.
+    expect(premiumSegments.reduce((sum, duration) => sum + duration, 0)).toBe(48);
   });
 });
 

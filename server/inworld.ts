@@ -43,9 +43,9 @@ function getVisionModel(): string {
   return model;
 }
 
-/** Kling supports up to 15s clips; the AI picks the ideal length in this range. */
+/** Highest final tour duration offered by any plan. */
 export const MIN_CLIP_DURATION = 4;
-export const MAX_CLIP_DURATION = 15;
+export const MAX_CLIP_DURATION = 30;
 
 /**
  * Each rendered shot (a per-image transition of a multi-image tour, or the
@@ -97,23 +97,27 @@ export function clampSegmentDuration(value: number | undefined | null): number {
   );
 }
 
-/** Keep the complete stitched tour within the advertised 15-second cap. */
+/**
+ * Keep provider segments in Kling's valid range. When the source minimum is
+ * longer than the plan's final cap, post-production speeds every full segment
+ * up proportionally so all uploaded images remain represented.
+ */
 export function normalizeSegmentDurations(
   values: Array<number | undefined | null>,
-  segmentCount: number
+  segmentCount: number,
+  maxTotalDuration = MAX_CLIP_DURATION
 ): number[] {
   const durations = Array.from({ length: segmentCount }, (_, index) =>
     clampSegmentDuration(values[index])
   );
   let total = durations.reduce((sum, value) => sum + value, 0);
-  let cursor = 0;
-  while (total > MAX_CLIP_DURATION) {
-    const index = cursor % durations.length;
-    if (durations[index] > SEGMENT_MIN_DURATION) {
-      durations[index] -= 1;
-      total -= 1;
-    }
-    cursor += 1;
+  while (total > maxTotalDuration) {
+    const reducibleIndex = durations.findIndex(
+      duration => duration > SEGMENT_MIN_DURATION
+    );
+    if (reducibleIndex === -1) break;
+    durations[reducibleIndex] -= 1;
+    total -= 1;
   }
   return durations;
 }
@@ -124,8 +128,14 @@ export function segmentCountFor(imageCount: number): number {
 }
 
 /** Sensible fallback length when the AI does not return one (scales with photo count). */
-export function defaultDurationFor(imageCount: number): number {
-  return clampDuration(Math.min(MAX_CLIP_DURATION, 4 + imageCount * 2));
+export function defaultDurationFor(
+  imageCount: number,
+  maxDurationSeconds = 15
+): number {
+  return Math.max(
+    MIN_CLIP_DURATION,
+    Math.min(maxDurationSeconds, 4 + imageCount * 2)
+  );
 }
 
 /**
@@ -135,8 +145,9 @@ export function defaultDurationFor(imageCount: number): number {
  */
 export async function analyzeAndOptimizePrompt(params: {
   images: OrderedImage[];
+  maxDurationSeconds: number;
 }): Promise<AnalysisResult> {
-  const { images } = params;
+  const { images, maxDurationSeconds } = params;
   if (images.length === 0) throw new Error("No images provided for analysis");
 
   // Enforce strict ordering before anything is sent.
@@ -172,7 +183,7 @@ export async function analyzeAndOptimizePrompt(params: {
       `- Hero details and feature spaces → elegant, slow cinematic push-ins with warm, filmic lighting.`,
       `For each photo choose the single safest, most flattering camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) and note the chosen style.`,
       shotPlan,
-      `For EACH shot, choose its IDEAL length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION}. The SUM of all shot lengths must be no more than ${MAX_CLIP_DURATION} seconds. Return them in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
+      `For EACH shot, choose its IDEAL source length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION}. The final edit is capped at ${maxDurationSeconds} seconds; when Kling's per-shot minimum makes the source longer, post-production will speed each complete shot proportionally. Return source lengths in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
       `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the images in order (Image 1 → Image 2 → … → Image ${ordered.length}), smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the images strictly in the given order, starting on Image 1 and ending on Image ${ordered.length}.`,
       `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"segment_durations":number[]}`,
     ]
@@ -228,7 +239,8 @@ export async function analyzeAndOptimizePrompt(params: {
     : [];
   const segmentDurations = normalizeSegmentDurations(
     rawDurations.map(value => (typeof value === "number" ? value : undefined)),
-    segmentCount
+    segmentCount,
+    maxDurationSeconds
   );
   const duration = segmentDurations.reduce((sum, value) => sum + value, 0);
 

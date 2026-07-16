@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Clock3, Loader2, Sparkles } from "lucide-react";
 import {
+  PROMOTIONAL_CYCLE_HOURS,
   PROMOTIONAL_DISCOUNT_PERCENT,
   plansForInterval,
   type BillingInterval,
@@ -9,28 +10,59 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const PROMO_END = (() => {
-  const configured = import.meta.env.VITE_PROMO_END_AT;
-  const parsed = configured ? Date.parse(configured) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : Date.UTC(2026, 11, 31, 23, 59, 59);
-})();
+const PROMO_CYCLE_MS = PROMOTIONAL_CYCLE_HOURS * 60 * 60 * 1000;
+const PROMO_STORAGE_PREFIX = "estatetour_promo_cycle_end";
 
-function getPromoEnd() {
-  return PROMO_END;
+function promoStorageKey(userKey: string | number | undefined) {
+  return `${PROMO_STORAGE_PREFIX}:${encodeURIComponent(String(userKey ?? "guest"))}`;
 }
 
-function useCountdown() {
-  const [end] = useState(getPromoEnd);
-  const [remaining, setRemaining] = useState(() =>
-    Math.max(0, end - Date.now())
-  );
+function readOrAdvancePromoEnd(
+  userKey: string | number | undefined,
+  now: number
+): number {
+  const key = promoStorageKey(userKey);
+  let end = Number.NaN;
+  try {
+    end = Number(localStorage.getItem(key));
+  } catch {
+    // A stable in-memory end is maintained by the hook when storage is blocked.
+  }
+  if (!Number.isFinite(end) || end <= 0) {
+    end = now + PROMO_CYCLE_MS;
+  } else if (end <= now) {
+    end += (Math.floor((now - end) / PROMO_CYCLE_MS) + 1) * PROMO_CYCLE_MS;
+  }
+  try {
+    localStorage.setItem(key, String(end));
+  } catch {
+    // The countdown remains presentation-only when browser storage is blocked.
+  }
+  return end;
+}
+
+function useCountdown(userKey: string | number | undefined) {
+  const [remaining, setRemaining] = useState(PROMO_CYCLE_MS);
   useEffect(() => {
-    const timer = window.setInterval(
-      () => setRemaining(Math.max(0, end - Date.now())),
-      1000
-    );
+    let end = readOrAdvancePromoEnd(userKey, Date.now());
+    const tick = () => {
+      const now = Date.now();
+      if (end <= now) {
+        end +=
+          (Math.floor((now - end) / PROMO_CYCLE_MS) + 1) * PROMO_CYCLE_MS;
+        try {
+          localStorage.setItem(promoStorageKey(userKey), String(end));
+        } catch {
+          // Continue the in-memory cycle if persistence is unavailable.
+        }
+      }
+      setRemaining(Math.max(0, end - now));
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
-  }, [end]);
+  }, [userKey]);
+
   const seconds = Math.floor(remaining / 1000);
   return {
     days: Math.floor(seconds / 86400),
@@ -58,6 +90,7 @@ interface PricingCardsProps {
   loadingPlan?: PlanId | null;
   compact?: boolean;
   className?: string;
+  promoUserKey?: string | number;
 }
 
 export default function PricingCards({
@@ -65,9 +98,10 @@ export default function PricingCards({
   loadingPlan = null,
   compact = false,
   className,
+  promoUserKey = "guest",
 }: PricingCardsProps) {
   const [interval, setInterval] = useState<BillingInterval>("year");
-  const countdown = useCountdown();
+  const countdown = useCountdown(promoUserKey);
   const plans = useMemo(() => plansForInterval(interval), [interval]);
 
   return (
@@ -83,7 +117,7 @@ export default function PricingCards({
               Launch offer · {PROMOTIONAL_DISCOUNT_PERCENT}% off
             </p>
             <p className="text-xs text-white/55">
-              Lock in promotional pricing before the timer ends.
+              Your personal offer renews automatically every {PROMOTIONAL_CYCLE_HOURS} hours.
             </p>
           </div>
         </div>
@@ -116,7 +150,7 @@ export default function PricingCards({
               {value === "month" ? "Monthly" : "Yearly"}
               {value === "year" && (
                 <span className="absolute -right-5 -top-3 rounded-full bg-zinc-950 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
-                  Save more
+                  Annual rates
                 </span>
               )}
             </button>

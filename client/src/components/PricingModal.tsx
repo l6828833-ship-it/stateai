@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import PricingCards from "@/components/PricingCards";
+import PayAsYouGoCard from "@/components/PayAsYouGoCard";
 import type { PlanId } from "@shared/plans";
 import { Sparkles } from "lucide-react";
 
@@ -10,6 +11,11 @@ interface PricingModalProps {
   onSelectPlan: (planId: PlanId) => Promise<void> | void;
   title?: string;
   subtitle?: string;
+  promoUserKey?: string | number;
+  currentPlan?: string | null;
+  subscribed?: boolean;
+  additionalVideoPriceUsd?: number;
+  onBuyAdditionalVideo?: () => void;
 }
 
 export default function PricingModal({
@@ -18,6 +24,11 @@ export default function PricingModal({
   onSelectPlan,
   title = "Choose the plan that fits your studio",
   subtitle = "Three flexible tiers, available monthly or yearly. Every plan includes high-quality 1080p exports with no watermark.",
+  promoUserKey = "guest",
+  currentPlan,
+  subscribed = false,
+  additionalVideoPriceUsd,
+  onBuyAdditionalVideo,
 }: PricingModalProps) {
   const [loadingPlan, setLoadingPlan] = useState<PlanId | null>(null);
 
@@ -50,6 +61,27 @@ export default function PricingModal({
           compact
           loadingPlan={loadingPlan}
           onSelectPlan={handleSelect}
+          promoUserKey={promoUserKey}
+        />
+        <PayAsYouGoCard
+          className="mt-6"
+          compact
+          currentPlan={currentPlan}
+          subscribed={subscribed}
+          additionalVideoPriceUsd={additionalVideoPriceUsd}
+          actionLabel={
+            subscribed ? "Buy additional video" : "Choose a plan above"
+          }
+          onAction={() => {
+            if (subscribed && onBuyAdditionalVideo) {
+              onOpenChange(false);
+              onBuyAdditionalVideo();
+              return;
+            }
+            document
+              .querySelector('[aria-label="Promotional offer countdown"]')
+              ?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }}
         />
         <p className="mt-6 text-center text-xs text-muted-foreground">
           Secure checkout by Stripe · Subscriptions renew automatically · Cancel

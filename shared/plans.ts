@@ -15,7 +15,10 @@ export interface Plan {
   tagline: string;
   videoAllowance: string;
   includedVideos: number;
+  monthlyVideos: number;
   maxImages: number;
+  maxDurationSeconds: number;
+  additionalVideoPriceUsd: number;
   maxResolution: string;
   features: string[];
   highlighted?: boolean;
@@ -26,41 +29,54 @@ const TIER_CONFIG = {
   starter: {
     name: "Starter",
     tagline: "For standout individual listings",
-    monthlyPrice: 17,
-    yearlyMonthlyPrice: 13,
+    monthlyPrice: 29,
+    yearlyMonthlyPrice: 29,
     videos: 3,
+    maxImages: 6,
+    maxDurationSeconds: 15,
+    additionalVideoPriceUsd: 17,
   },
   creator: {
-    name: "Creator",
+    name: "Pro",
     tagline: "For active agents and creators",
-    monthlyPrice: 39,
-    yearlyMonthlyPrice: 29,
-    videos: 10,
+    monthlyPrice: 69,
+    yearlyMonthlyPrice: 49,
+    videos: 7,
+    maxImages: 12,
+    maxDurationSeconds: 25,
+    additionalVideoPriceUsd: 14,
   },
   studio: {
-    name: "Studio",
+    name: "Premium",
     tagline: "For teams and high-volume studios",
-    monthlyPrice: 79,
-    yearlyMonthlyPrice: 59,
-    videos: 30,
+    monthlyPrice: 99,
+    yearlyMonthlyPrice: 79,
+    videos: 15,
+    maxImages: 17,
+    maxDurationSeconds: 30,
+    additionalVideoPriceUsd: 10,
   },
 } as const;
 
-const tierFeatures: Record<PlanTier, string[]> = {
-  starter: ["3 videos per month", "6 images per video"],
-  creator: ["10 videos per month", "6 images per video"],
-  studio: ["30 videos per month", "6 images per video", "Team-ready volume"],
-};
-
-const sharedFeatures = [
-  "1080p high quality, up to 15 seconds",
-  "All ratios: 9:16, 1:1, and 16:9",
-  "Best viral effects per video",
-  "$17 per additional video",
-  "No watermark",
-] as const;
-
 const originalPriceFor = (price: number) => Math.ceil(price / 0.38);
+
+function featuresForTier(tier: PlanTier, interval: BillingInterval): string[] {
+  const config = TIER_CONFIG[tier];
+  const allowance =
+    interval === "year"
+      ? `${config.videos} videos per month (${config.videos * 12} per annual billing period)`
+      : `${config.videos} videos per month`;
+  return [
+    allowance,
+    `${config.maxImages} images per video`,
+    ...(tier === "studio" ? ["Team-ready volume"] : []),
+    `1080p high quality, up to ${config.maxDurationSeconds} seconds`,
+    "All ratios: 9:16, 1:1, and 16:9",
+    "Best viral effects per video",
+    `$${config.additionalVideoPriceUsd} per additional video`,
+    "No watermark",
+  ];
+}
 
 export const MONTHLY_PLANS: Plan[] = (
   Object.keys(TIER_CONFIG) as PlanTier[]
@@ -78,11 +94,14 @@ export const MONTHLY_PLANS: Plan[] = (
     tagline: config.tagline,
     videoAllowance: `${config.videos} videos per month`,
     includedVideos: config.videos,
-    maxImages: 6,
+    monthlyVideos: config.videos,
+    maxImages: config.maxImages,
+    maxDurationSeconds: config.maxDurationSeconds,
+    additionalVideoPriceUsd: config.additionalVideoPriceUsd,
     maxResolution: "1080p",
     highlighted: tier === "creator",
     badge: tier === "creator" ? "Most popular" : undefined,
-    features: [...tierFeatures[tier], ...sharedFeatures],
+    features: featuresForTier(tier, "month"),
   };
 });
 
@@ -96,21 +115,23 @@ export const YEARLY_PLANS: Plan[] = (
     tier,
     name: config.name,
     price,
-    originalPrice: originalPriceFor(price),
+    originalPrice: originalPriceFor(config.yearlyMonthlyPrice) * 12,
     interval: "year",
-    priceLabel: `$${price}/year`,
-    tagline: `${config.tagline} · save with annual billing`,
+    priceLabel: `$${config.yearlyMonthlyPrice}/month, billed yearly`,
+    tagline:
+      config.yearlyMonthlyPrice < config.monthlyPrice
+        ? `${config.tagline} · save with annual billing`
+        : `${config.tagline} · annual billing`,
     videoAllowance: `${config.videos * 12} videos per year`,
     includedVideos: config.videos * 12,
-    maxImages: 6,
+    monthlyVideos: config.videos,
+    maxImages: config.maxImages,
+    maxDurationSeconds: config.maxDurationSeconds,
+    additionalVideoPriceUsd: config.additionalVideoPriceUsd,
     maxResolution: "1080p",
     highlighted: tier === "creator",
     badge: tier === "creator" ? "Best value" : undefined,
-    features: [
-      `${config.videos * 12} videos per year`,
-      ...tierFeatures[tier].slice(1),
-      ...sharedFeatures,
-    ],
+    features: featuresForTier(tier, "year"),
   };
 });
 
@@ -128,17 +149,23 @@ export function isPlanId(value: string): value is PlanId {
   return value in PLAN_BY_ID;
 }
 
+export function planForStoredId(value: string | null | undefined): Plan | null {
+  return value && isPlanId(value) ? PLAN_BY_ID[value] : null;
+}
+
 /** Tour styles — labels must be exactly these three. */
 export const TOUR_STYLES = ["Walkthrough", "Drone", "Cinematic"] as const;
 export type TourStyleId = (typeof TOUR_STYLES)[number];
 
 export const RESOLUTIONS = ["480p", "720p", "1080p"] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
-export const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
+export const DURATIONS = [4, 5, 6, 8, 10, 12, 15, 25, 30] as const;
 
+/** Free/guest fallback; paid plans can allow more through their entitlement. */
 export const MAX_IMAGES = 6;
 export const MAX_IMAGE_SIZE_MB = 10;
 export const MAX_IMAGE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 export const MAX_IMAGE_BASE64_LENGTH = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);
 export const ADDITIONAL_VIDEO_PRICE_USD = 17;
 export const PROMOTIONAL_DISCOUNT_PERCENT = 62;
+export const PROMOTIONAL_CYCLE_HOURS = 66;

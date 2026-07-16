@@ -3,7 +3,6 @@ import type { Request, Response } from "express";
 import {
   ADDITIONAL_VIDEO_PRICE_USD,
   PLAN_BY_ID,
-  PLANS,
   isPlanId,
   type PlanId,
 } from "@shared/plans";
@@ -24,20 +23,146 @@ export function getStripe(): Stripe {
  * lookup_key so we never duplicate them across restarts.
  */
 const priceCache = new Map<PlanId, string>();
-let additionalVideoPriceId: string | null = null;
-
-const ADDITIONAL_VIDEO_PRICE_CENTS = ADDITIONAL_VIDEO_PRICE_USD * 100;
+const additionalVideoPriceCache = new Map<number, string>();
 
 type LegacyPlanId = "starter" | "annual" | "pro" | "business";
 type StoredPlanId = PlanId | LegacyPlanId;
 type RecurringInterval = "month" | "year";
 
-const CURRENT_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, PlanId>> =
-  Object.freeze(
-    Object.fromEntries(
-      PLANS.map(plan => [`estatetour_${plan.id}_v3`, plan.id])
-    ) as Record<string, PlanId>
-  );
+export type GenerationEntitlement = {
+  periodStart: Date;
+  periodEnd: Date;
+  enforceAllowance: boolean;
+  planId?: PlanId;
+  includedVideos: number;
+  maxImages: number;
+  maxDurationSeconds: number;
+  additionalVideoPriceUsd: number;
+};
+
+type ClassifiedGenerationPrice = Omit<
+  GenerationEntitlement,
+  "periodStart" | "periodEnd"
+> & { storedPlanId: StoredPlanId };
+
+type VersionedPlanContract = {
+  planId: PlanId;
+  amount: number;
+  interval: RecurringInterval;
+  includedVideos: number;
+  maxImages: number;
+  maxDurationSeconds: number;
+  additionalVideoPriceUsd: number;
+};
+
+/** Immutable v4 contracts: future catalog edits must use a new price version. */
+const V4_PRICE_BY_LOOKUP_KEY: Readonly<Record<string, VersionedPlanContract>> =
+  Object.freeze({
+    estatetour_starter_monthly_v4: {
+      planId: "starter_monthly",
+      amount: 2900,
+      interval: "month",
+      includedVideos: 3,
+      maxImages: 6,
+      maxDurationSeconds: 15,
+      additionalVideoPriceUsd: 17,
+    },
+    estatetour_starter_yearly_v4: {
+      planId: "starter_yearly",
+      amount: 34800,
+      interval: "year",
+      includedVideos: 36,
+      maxImages: 6,
+      maxDurationSeconds: 15,
+      additionalVideoPriceUsd: 17,
+    },
+    estatetour_creator_monthly_v4: {
+      planId: "creator_monthly",
+      amount: 6900,
+      interval: "month",
+      includedVideos: 7,
+      maxImages: 12,
+      maxDurationSeconds: 25,
+      additionalVideoPriceUsd: 14,
+    },
+    estatetour_creator_yearly_v4: {
+      planId: "creator_yearly",
+      amount: 58800,
+      interval: "year",
+      includedVideos: 84,
+      maxImages: 12,
+      maxDurationSeconds: 25,
+      additionalVideoPriceUsd: 14,
+    },
+    estatetour_studio_monthly_v4: {
+      planId: "studio_monthly",
+      amount: 9900,
+      interval: "month",
+      includedVideos: 15,
+      maxImages: 17,
+      maxDurationSeconds: 30,
+      additionalVideoPriceUsd: 10,
+    },
+    estatetour_studio_yearly_v4: {
+      planId: "studio_yearly",
+      amount: 94800,
+      interval: "year",
+      includedVideos: 180,
+      maxImages: 17,
+      maxDurationSeconds: 30,
+      additionalVideoPriceUsd: 10,
+    },
+  });
+
+/** Immutable v3 contracts: never derive these sold terms from today's catalog. */
+const V3_PRICE_BY_LOOKUP_KEY: Readonly<
+  Record<
+    string,
+    {
+      planId: PlanId;
+      amount: number;
+      interval: RecurringInterval;
+      includedVideos: number;
+    }
+  >
+> = Object.freeze({
+  estatetour_starter_monthly_v3: {
+    planId: "starter_monthly",
+    amount: 1700,
+    interval: "month",
+    includedVideos: 3,
+  },
+  estatetour_starter_yearly_v3: {
+    planId: "starter_yearly",
+    amount: 15600,
+    interval: "year",
+    includedVideos: 36,
+  },
+  estatetour_creator_monthly_v3: {
+    planId: "creator_monthly",
+    amount: 3900,
+    interval: "month",
+    includedVideos: 10,
+  },
+  estatetour_creator_yearly_v3: {
+    planId: "creator_yearly",
+    amount: 34800,
+    interval: "year",
+    includedVideos: 120,
+  },
+  estatetour_studio_monthly_v3: {
+    planId: "studio_monthly",
+    amount: 7900,
+    interval: "month",
+    includedVideos: 30,
+  },
+  estatetour_studio_yearly_v3: {
+    planId: "studio_yearly",
+    amount: 70800,
+    interval: "year",
+    includedVideos: 360,
+  },
+});
 
 const LEGACY_PRICE_BY_LOOKUP_KEY: Readonly<
   Record<
@@ -56,6 +181,13 @@ const LEGACY_PRICE_BY_LOOKUP_KEY: Readonly<
     interval: "month",
   },
 });
+
+const LEGACY_LIMITS = {
+  includedVideos: 0,
+  maxImages: 6,
+  maxDurationSeconds: 15,
+  additionalVideoPriceUsd: ADDITIONAL_VIDEO_PRICE_USD,
+} as const;
 
 function isExactRecurringPrice(
   price: Stripe.Price,
@@ -91,31 +223,58 @@ function isExactPlanPrice(
 /** Classify only exact prices created by known versions of this application. */
 export function classifyGenerationPrice(
   price: Stripe.Price
-):
-  | { planId: PlanId; enforceAllowance: true }
-  | { planId: LegacyPlanId; enforceAllowance: false }
-  | null {
+): ClassifiedGenerationPrice | null {
   const lookupKey = price.lookup_key ?? "";
-  const currentPlanId = CURRENT_PRICE_BY_LOOKUP_KEY[lookupKey];
-  if (currentPlanId) {
+  const current = V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+  if (current) {
     // Archived prices remain valid for subscriptions that already bought them;
     // `active` controls new purchases, not existing entitlements.
-    return isExactPlanPrice(price, currentPlanId, false)
-      ? { planId: currentPlanId, enforceAllowance: true }
+    return isExactRecurringPrice(price, current, false)
+      ? {
+          storedPlanId: current.planId,
+          planId: current.planId,
+          enforceAllowance: true,
+          includedVideos: current.includedVideos,
+          maxImages: current.maxImages,
+          maxDurationSeconds: current.maxDurationSeconds,
+          additionalVideoPriceUsd: current.additionalVideoPriceUsd,
+        }
+      : null;
+  }
+
+  const v3 = V3_PRICE_BY_LOOKUP_KEY[lookupKey];
+  if (v3) {
+    return isExactRecurringPrice(price, v3, false)
+      ? {
+          storedPlanId: v3.planId,
+          planId: v3.planId,
+          enforceAllowance: true,
+          ...LEGACY_LIMITS,
+          includedVideos: v3.includedVideos,
+        }
       : null;
   }
 
   const legacy = LEGACY_PRICE_BY_LOOKUP_KEY[lookupKey];
   if (!legacy) return null;
   return isExactRecurringPrice(price, legacy, false)
-    ? { planId: legacy.planId, enforceAllowance: false }
+    ? {
+        storedPlanId: legacy.planId,
+        enforceAllowance: false,
+        ...LEGACY_LIMITS,
+      }
     : null;
 }
 
-const ADDITIONAL_VIDEO_LOOKUP_KEY =
-  "estatetour_additional_video_v3" as const;
+const ADDITIONAL_VIDEO_V4_LOOKUP_BY_AMOUNT = Object.freeze({
+  1000: "estatetour_additional_video_premium_v4",
+  1400: "estatetour_additional_video_pro_v4",
+  1700: "estatetour_additional_video_starter_v4",
+} as const);
 const LEGACY_ADDITIONAL_VIDEO_LOOKUP_KEY =
   "estatetour_additional_video_v2" as const;
+const V3_ADDITIONAL_VIDEO_LOOKUP_KEY =
+  "estatetour_additional_video_v3" as const;
 const LEGACY_ADDITIONAL_VIDEO_PRICE_CENTS = 1500;
 
 function isExactOneTimePrice(
@@ -134,19 +293,22 @@ function isExactOneTimePrice(
   );
 }
 
-function isExactAdditionalVideoPrice(price: Stripe.Price): boolean {
-  return isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_CENTS, true);
-}
-
 /** Recognize exact current and legacy add-on prices for redemption only. */
 export function recognizedAdditionalVideoAmount(
   price: Stripe.Price
 ): number | null {
+  const v4Entry = Object.entries(ADDITIONAL_VIDEO_V4_LOOKUP_BY_AMOUNT).find(
+    ([, lookupKey]) => price.lookup_key === lookupKey
+  );
+  if (v4Entry) {
+    const amount = Number(v4Entry[0]);
+    return isExactOneTimePrice(price, amount, false) ? amount : null;
+  }
   if (
-    price.lookup_key === ADDITIONAL_VIDEO_LOOKUP_KEY &&
-    isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_CENTS, false)
+    price.lookup_key === V3_ADDITIONAL_VIDEO_LOOKUP_KEY &&
+    isExactOneTimePrice(price, ADDITIONAL_VIDEO_PRICE_USD * 100, false)
   ) {
-    return ADDITIONAL_VIDEO_PRICE_CENTS;
+    return ADDITIONAL_VIDEO_PRICE_USD * 100;
   }
   if (
     price.lookup_key === LEGACY_ADDITIONAL_VIDEO_LOOKUP_KEY &&
@@ -163,7 +325,21 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
 
   const stripe = getStripe();
   const plan = PLAN_BY_ID[planId];
-  const lookupKey = `estatetour_${planId}_v3`;
+  const lookupKey = `estatetour_${planId}_v4`;
+  const contract = V4_PRICE_BY_LOOKUP_KEY[lookupKey];
+  if (
+    !contract ||
+    contract.amount !== plan.price * 100 ||
+    contract.interval !== plan.interval ||
+    contract.includedVideos !== plan.includedVideos ||
+    contract.maxImages !== plan.maxImages ||
+    contract.maxDurationSeconds !== plan.maxDurationSeconds ||
+    contract.additionalVideoPriceUsd !== plan.additionalVideoPriceUsd
+  ) {
+    throw new Error(
+      `Plan ${planId} changed without a new immutable Stripe price version`
+    );
+  }
 
   const existing = await stripe.prices.list({
     lookup_keys: [lookupKey],
@@ -198,44 +374,61 @@ export async function ensurePrice(planId: PlanId): Promise<string> {
   return price.id;
 }
 
-async function ensureAdditionalVideoPrice(): Promise<string> {
-  if (additionalVideoPriceId) return additionalVideoPriceId;
+async function ensureAdditionalVideoPrice(
+  amountUsd: number
+): Promise<string> {
+  const amountCents = amountUsd * 100;
+  const cached = additionalVideoPriceCache.get(amountCents);
+  if (cached) return cached;
+
+  const lookupKey =
+    ADDITIONAL_VIDEO_V4_LOOKUP_BY_AMOUNT[
+      amountCents as keyof typeof ADDITIONAL_VIDEO_V4_LOOKUP_BY_AMOUNT
+    ];
+  if (!lookupKey) {
+    throw new Error(`Unsupported additional-video price: $${amountUsd}`);
+  }
 
   const stripe = getStripe();
-  const lookupKey = ADDITIONAL_VIDEO_LOOKUP_KEY;
   const existing = await stripe.prices.list({
     lookup_keys: [lookupKey],
     limit: 1,
   });
   if (existing.data.length > 0) {
-    if (!isExactAdditionalVideoPrice(existing.data[0])) {
+    if (!isExactOneTimePrice(existing.data[0], amountCents, true)) {
       throw new Error(
-        `The configured additional-video Stripe price is not exactly USD $${ADDITIONAL_VIDEO_PRICE_USD}`
+        `The configured additional-video Stripe price is not exactly USD $${amountUsd}`
       );
     }
-    additionalVideoPriceId = existing.data[0].id;
-    return additionalVideoPriceId;
+    additionalVideoPriceCache.set(amountCents, existing.data[0].id);
+    return existing.data[0].id;
   }
 
   const product = await stripe.products.create({
-    name: "EstateTour AI — Additional video",
-    description: `One additional high-quality 1080p cinematic video for $${ADDITIONAL_VIDEO_PRICE_USD}`,
-    metadata: { purchase_type: "additional_video" },
+    name: `EstateTour AI — Additional video ($${amountUsd} tier)`,
+    description: `One additional high-quality 1080p cinematic video for $${amountUsd}`,
+    metadata: {
+      purchase_type: "additional_video",
+      amount_usd: amountUsd.toString(),
+    },
   });
   const price = await stripe.prices.create({
     product: product.id,
-    unit_amount: ADDITIONAL_VIDEO_PRICE_CENTS,
+    unit_amount: amountCents,
     currency: "usd",
     lookup_key: lookupKey,
-    metadata: { purchase_type: "additional_video" },
+    metadata: {
+      purchase_type: "additional_video",
+      amount_usd: amountUsd.toString(),
+    },
   });
   const createdPrice = await stripe.prices.retrieve(price.id);
-  if (!isExactAdditionalVideoPrice(createdPrice)) {
+  if (!isExactOneTimePrice(createdPrice, amountCents, true)) {
     throw new Error(
-      `Stripe did not create the exact USD $${ADDITIONAL_VIDEO_PRICE_USD} additional-video price`
+      `Stripe did not create the exact USD $${amountUsd} additional-video price`
     );
   }
-  additionalVideoPriceId = price.id;
+  additionalVideoPriceCache.set(amountCents, price.id);
   return price.id;
 }
 
@@ -540,7 +733,9 @@ export async function handleAdditionalVideoCheckout(
     }
 
     const stripe = getStripe();
-    const priceId = await ensureAdditionalVideoPrice();
+    const priceId = await ensureAdditionalVideoPrice(
+      entitlement.additionalVideoPriceUsd
+    );
     const origin = getOrigin(req);
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -572,13 +767,10 @@ export async function handleAdditionalVideoCheckout(
   }
 }
 
-/** Return Stripe's exact period and a fail-closed classification of its price. */
-export async function getStripeGenerationEntitlement(userId: number): Promise<{
-  periodStart: Date;
-  periodEnd: Date;
-  enforceAllowance: boolean;
-  planId?: PlanId;
-} | null> {
+/** Return Stripe's exact period and immutable terms classified from its price. */
+export async function getStripeGenerationEntitlement(
+  userId: number
+): Promise<GenerationEntitlement | null> {
   const stored = await db.getSubscription(userId);
   if (!stored?.stripeSubscriptionId) return null;
 
@@ -605,11 +797,15 @@ export async function getStripeGenerationEntitlement(userId: number): Promise<{
     periodStart: new Date(item.current_period_start * 1000),
     periodEnd: new Date(item.current_period_end * 1000),
     enforceAllowance: classified.enforceAllowance,
-    ...(classified.enforceAllowance ? { planId: classified.planId } : {}),
+    includedVideos: classified.includedVideos,
+    maxImages: classified.maxImages,
+    maxDurationSeconds: classified.maxDurationSeconds,
+    additionalVideoPriceUsd: classified.additionalVideoPriceUsd,
+    ...(classified.planId ? { planId: classified.planId } : {}),
   };
 }
 
-/** Verify an exact paid current $17 or legacy $15 add-on checkout. */
+/** Verify an exact paid v4 tier, v3 $17, or legacy $15 add-on checkout. */
 export async function verifyAdditionalVideoCheckout(
   sessionId: string,
   userId: number
@@ -706,7 +902,7 @@ function planFromSubscription(sub: Stripe.Subscription): StoredPlanId | null {
   if (sub.items.data.length !== 1) return null;
   const item = sub.items.data[0];
   if (!item || item.quantity !== 1) return null;
-  return classifyGenerationPrice(item.price)?.planId ?? null;
+  return classifyGenerationPrice(item.price)?.storedPlanId ?? null;
 }
 
 async function syncSubscriptionToDb(sub: Stripe.Subscription) {

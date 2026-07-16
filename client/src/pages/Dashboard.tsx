@@ -11,6 +11,7 @@ import GenerationTheater, {
   type TheaterMode,
 } from "@/components/GenerationTheater";
 import PricingModal from "@/components/PricingModal";
+import PayAsYouGoCard from "@/components/PayAsYouGoCard";
 import DashboardSidebar from "@/components/DashboardSidebar";
 import DashboardBottomNav from "@/components/DashboardBottomNav";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import {
   loadDraftWithImages,
   saveDraft,
 } from "@/hooks/useToolDraft";
-import type { PlanId } from "@shared/plans";
+import { planForStoredId, type PlanId } from "@shared/plans";
 import {
   BadgeCheck,
   BarChart3,
@@ -31,6 +32,7 @@ import {
   Download,
   Film,
   History,
+  ImagePlus,
   Loader2,
   Menu,
   RefreshCw,
@@ -160,9 +162,11 @@ export default function Dashboard() {
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [draftSyncing, setDraftSyncing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [quickUploadDragOver, setQuickUploadDragOver] = useState(false);
   const [activeSection, setActiveSection] =
     useState<DashSection>("overview");
   const draftSyncedRef = useRef(false);
+  const quickUploadInputRef = useRef<HTMLInputElement>(null);
   const pricingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stateQuery = trpc.tour.getState.useQuery(undefined, {
@@ -182,6 +186,21 @@ export default function Dashboard() {
   const serverImages = stateQuery.data?.images ?? [];
   const subscribed = stateQuery.data?.subscribed ?? false;
   const currentPlan = stateQuery.data?.plan ?? null;
+  const entitlementQuery = trpc.tour.getPlanEntitlement.useQuery(undefined, {
+    enabled: subscribed,
+    retry: shouldRetryStudioQuery,
+    retryDelay: failureCount => Math.min(1000 * 2 ** failureCount, 10_000),
+    refetchOnReconnect: true,
+  });
+  const currentCatalogPlan = planForStoredId(currentPlan);
+  const maxImages = entitlementQuery.data?.maxImages ?? 6;
+  const maxDurationSeconds =
+    entitlementQuery.data?.maxDurationSeconds ?? 15;
+  const additionalVideoPriceUsd =
+    entitlementQuery.data?.additionalVideoPriceUsd;
+  const planEntitlementPending = subscribed && !entitlementQuery.data;
+  const planEntitlementUnavailable =
+    planEntitlementPending && !entitlementQuery.isFetching;
 
   const uploadMutation = trpc.tour.uploadImage.useMutation();
   const reorderMutation = trpc.tour.reorderImages.useMutation({
@@ -424,7 +443,41 @@ export default function Dashboard() {
         toast.error(`Failed to upload ${file.name}: ${message}`);
       }
     }
-    utils.tour.getState.invalidate();
+    await utils.tour.getState.invalidate();
+  };
+
+  const handleQuickFiles = async (fileList: FileList | File[]) => {
+    if (planEntitlementPending) {
+      toast.error("Your plan limits are still loading. Please try again.");
+      void entitlementQuery.refetch();
+      return;
+    }
+    const files = Array.from(fileList).filter(file =>
+      ["image/jpeg", "image/png", "image/webp"].includes(file.type)
+    );
+    if (files.length === 0) {
+      toast.error("Please upload JPG, PNG, or WebP photos");
+      return;
+    }
+    const room = maxImages - serverImages.length;
+    if (room <= 0) {
+      toast.error(`Maximum ${maxImages} photos per tour`);
+      handleCreateClick();
+      return;
+    }
+    if (files.length > room) {
+      toast.warning(
+        `Only ${room} more photo${room === 1 ? "" : "s"} can be added`
+      );
+    }
+
+    setActiveSection("create");
+    await handleFilesAdded(files.slice(0, room));
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById("tour-tool")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const handleReorder = (orderedIds: Array<string | number>) => {
@@ -860,6 +913,7 @@ export default function Dashboard() {
         onUpgradeClick={handleOpenPricing}
         onBuyAdditionalVideo={handleBuyAdditionalVideo}
         onBillingClick={handleOpenBillingPortal}
+        additionalVideoPriceUsd={additionalVideoPriceUsd}
       />
 
       {/* ===== Main column ===== */}
@@ -915,10 +969,8 @@ export default function Dashboard() {
                 <>
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
                     <Crown className="h-3.5 w-3.5 text-primary" />
-                    {currentPlan
-                      ? currentPlan
-                          .replaceAll("_", " ")
-                          .replace(/\b\w/g, letter => letter.toUpperCase())
+                    {currentCatalogPlan
+                      ? `${currentCatalogPlan.name} ${currentCatalogPlan.interval === "year" ? "Yearly" : "Monthly"}`
                       : "Active"}{" "}
                     plan
                   </span>
@@ -1017,9 +1069,61 @@ export default function Dashboard() {
                     {serverImages.length === 1 ? "" : "s"}. Add more images,
                     arrange the sequence, and generate your next video.
                   </p>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Quick upload property photos"
+                    onClick={() => quickUploadInputRef.current?.click()}
+                    onKeyDown={event => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        quickUploadInputRef.current?.click();
+                      }
+                    }}
+                    onDragOver={event => {
+                      event.preventDefault();
+                      setQuickUploadDragOver(true);
+                    }}
+                    onDragLeave={() => setQuickUploadDragOver(false)}
+                    onDrop={event => {
+                      event.preventDefault();
+                      setQuickUploadDragOver(false);
+                      void handleQuickFiles(event.dataTransfer.files);
+                    }}
+                    className={cn(
+                      "mt-6 cursor-pointer rounded-2xl border-2 border-dashed p-5 text-center transition-all",
+                      quickUploadDragOver
+                        ? "border-zinc-950 bg-zinc-100"
+                        : "border-zinc-300 bg-white/65 hover:border-zinc-500 hover:bg-white"
+                    )}
+                  >
+                    <input
+                      ref={quickUploadInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      className="hidden"
+                      onChange={event => {
+                        if (event.target.files) {
+                          void handleQuickFiles(event.target.files);
+                        }
+                        event.target.value = "";
+                      }}
+                    />
+                    <ImagePlus className="mx-auto h-6 w-6 text-zinc-700" />
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      Drop images here or click to upload
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {planEntitlementPending
+                        ? "Plan upload limit is loading securely"
+                        : `Up to ${maxImages} photos · uploads open in Create Tour`}
+                    </p>
+                  </div>
                   <Button
                     type="button"
-                    className="btn-springy mt-6 rounded-full px-5"
+                    variant="ghost"
+                    className="btn-springy mt-3 rounded-full px-4"
                     onClick={handleCreateClick}
                   >
                     <Clapperboard className="mr-2 h-4 w-4" /> Open tour builder
@@ -1044,6 +1148,14 @@ export default function Dashboard() {
                   <HistoryList limit={3} />
                 </section>
               </div>
+              <PayAsYouGoCard
+                currentPlan={currentPlan}
+                subscribed={subscribed}
+                additionalVideoPriceUsd={additionalVideoPriceUsd}
+                onAction={
+                  subscribed ? handleBuyAdditionalVideo : handleOpenPricing
+                }
+              />
             </div>
           )}
 
@@ -1054,22 +1166,51 @@ export default function Dashboard() {
                 id="tour-tool"
                 className="glass-panel rounded-3xl border-zinc-200 bg-white p-6 sm:p-8"
               >
-                <TourTool
-                  images={toolImages}
-                  settings={settings}
-                  onFilesAdded={handleFilesAdded}
-                  onReorder={handleReorder}
-                  onDelete={handleDelete}
-                  onSettingsChange={handleSettingsChange}
-                  onGenerate={handleGenerate}
-                  generateLabel="Generate Tour Video"
-                  generating={
-                    generateMutation.isPending ||
-                    (theaterMode === "real" &&
-                      activeJob?.status === "processing")
-                  }
-                  disabled={draftSyncing}
-                />
+                {planEntitlementPending ? (
+                  <div className="flex min-h-72 flex-col items-center justify-center text-center">
+                    {planEntitlementUnavailable ? (
+                      <RefreshCw className="h-7 w-7 text-muted-foreground" />
+                    ) : (
+                      <Loader2 className="h-7 w-7 animate-spin text-primary" />
+                    )}
+                    <h2 className="mt-4 font-display text-xl text-foreground">
+                      Verifying your plan benefits
+                    </h2>
+                    <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                      Your exact image, duration, and additional-video limits load
+                      separately so the rest of your dashboard stays available.
+                    </p>
+                    {entitlementQuery.isError && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="btn-springy mt-4 rounded-full"
+                        onClick={() => void entitlementQuery.refetch()}
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" /> Try again
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <TourTool
+                    images={toolImages}
+                    settings={settings}
+                    onFilesAdded={handleFilesAdded}
+                    onReorder={handleReorder}
+                    onDelete={handleDelete}
+                    onSettingsChange={handleSettingsChange}
+                    onGenerate={handleGenerate}
+                    generateLabel="Generate Tour Video"
+                    maxImages={maxImages}
+                    maxDurationSeconds={maxDurationSeconds}
+                    generating={
+                      generateMutation.isPending ||
+                      (theaterMode === "real" &&
+                        activeJob?.status === "processing")
+                    }
+                    disabled={draftSyncing}
+                  />
+                )}
               </section>
 
               <div className="space-y-6">
@@ -1198,7 +1339,10 @@ export default function Dashboard() {
                     onClick={handleBuyAdditionalVideo}
                   >
                     <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Buy additional
-                    video · $17
+                    video
+                    {additionalVideoPriceUsd
+                      ? ` · $${additionalVideoPriceUsd}`
+                      : ""}
                   </Button>
                 ) : (
                   <Button
@@ -1238,6 +1382,11 @@ export default function Dashboard() {
         open={pricingOpen}
         onOpenChange={handlePricingOpenChange}
         onSelectPlan={handleSelectPlan}
+        promoUserKey={user?.id ?? "guest"}
+        currentPlan={currentPlan}
+        subscribed={subscribed}
+        additionalVideoPriceUsd={additionalVideoPriceUsd}
+        onBuyAdditionalVideo={handleBuyAdditionalVideo}
       />
     </div>
   );
