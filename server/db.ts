@@ -27,7 +27,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { PLAN_BY_ID, type PlanId } from "../shared/plans";
+import { PLAN_BY_ID, isPlanId, type PlanId } from "../shared/plans";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -708,6 +708,201 @@ export async function findSubscriptionByCustomerId(stripeCustomerId: string) {
     .where(eq(subscriptions.stripeCustomerId, stripeCustomerId))
     .limit(1);
   return rows[0];
+}
+
+const CHECKOUT_RESERVATION_RETRY_MS = 24 * 60 * 60 * 1000;
+
+export type SubscriptionCheckoutReservation = {
+  key: string;
+  planId: PlanId;
+  reservedAt: Date;
+  expiresAt: Date;
+  sessionId: string | null;
+  created: boolean;
+};
+
+function checkoutReservationFromRow(
+  row: typeof subscriptions.$inferSelect,
+  created: boolean
+): SubscriptionCheckoutReservation | null {
+  if (
+    !row.checkoutReservationKey ||
+    !row.checkoutPlanId ||
+    !isPlanId(row.checkoutPlanId) ||
+    !row.checkoutReservedAt ||
+    !row.checkoutExpiresAt
+  ) {
+    return null;
+  }
+  return {
+    key: row.checkoutReservationKey,
+    planId: row.checkoutPlanId,
+    reservedAt: row.checkoutReservedAt,
+    expiresAt: row.checkoutExpiresAt,
+    sessionId: row.checkoutSessionId,
+    created,
+  };
+}
+
+/**
+ * Return one durable checkout reservation per user. Reservation fields are
+ * separate from subscription status so Stripe webhooks cannot erase the lock.
+ */
+export async function reserveSubscriptionCheckout(
+  userId: number,
+  planId: PlanId
+): Promise<SubscriptionCheckoutReservation> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    let [existing] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+
+    if (!existing) {
+      [existing] = await tx
+        .insert(subscriptions)
+        .values({ userId })
+        .returning();
+    }
+    if (!existing) throw new Error("Could not initialize subscription record");
+
+    const current = checkoutReservationFromRow(existing, false);
+    if (current) return current;
+
+    const reservedAt = new Date();
+    const expiresAt = new Date(reservedAt.getTime() + 35 * 60 * 1000);
+    const key = `subscription_checkout_${userId}_${reservedAt.getTime()}`;
+    const [reserved] = await tx
+      .update(subscriptions)
+      .set({
+        checkoutReservationKey: key,
+        checkoutPlanId: planId,
+        checkoutReservedAt: reservedAt,
+        checkoutExpiresAt: expiresAt,
+        checkoutSessionId: null,
+      })
+      .where(eq(subscriptions.userId, userId))
+      .returning();
+    if (!reserved) throw new Error("Could not reserve subscription checkout");
+    const reservation = checkoutReservationFromRow(reserved, true);
+    if (!reservation) throw new Error("Could not reserve subscription checkout");
+    return reservation;
+  });
+}
+
+/** Replace an expired/reconciled reservation using compare-and-set semantics. */
+export async function replaceSubscriptionCheckoutReservation(
+  userId: number,
+  previousKey: string,
+  planId: PlanId
+): Promise<SubscriptionCheckoutReservation | null> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    const reservedAt = new Date();
+    const expiresAt = new Date(reservedAt.getTime() + 35 * 60 * 1000);
+    const key = `subscription_checkout_${userId}_${reservedAt.getTime()}`;
+    const [reserved] = await tx
+      .update(subscriptions)
+      .set({
+        checkoutReservationKey: key,
+        checkoutPlanId: planId,
+        checkoutReservedAt: reservedAt,
+        checkoutExpiresAt: expiresAt,
+        checkoutSessionId: null,
+      })
+      .where(
+        and(
+          eq(subscriptions.userId, userId),
+          eq(subscriptions.checkoutReservationKey, previousKey)
+        )
+      )
+      .returning();
+    return reserved ? checkoutReservationFromRow(reserved, true) : null;
+  });
+}
+
+/** Attach the Stripe Session only if this request still owns the reservation. */
+export async function storeSubscriptionCheckoutSession(
+  userId: number,
+  reservationKey: string,
+  sessionId: string
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const updated = await db
+    .update(subscriptions)
+    .set({ checkoutSessionId: sessionId })
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.checkoutReservationKey, reservationKey)
+      )
+    )
+    .returning({ id: subscriptions.id });
+  return updated.length === 1;
+}
+
+/** Release only the reservation owned by the matching failed request. */
+export async function releaseSubscriptionCheckout(
+  userId: number,
+  reservationKey: string
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(subscriptions)
+    .set({
+      checkoutReservationKey: null,
+      checkoutPlanId: null,
+      checkoutReservedAt: null,
+      checkoutExpiresAt: null,
+      checkoutSessionId: null,
+    })
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.checkoutReservationKey, reservationKey)
+      )
+    );
+}
+
+export async function clearSubscriptionCheckoutReservation(
+  userId: number,
+  reservationKey: string
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(subscriptions)
+    .set({
+      checkoutReservationKey: null,
+      checkoutPlanId: null,
+      checkoutReservedAt: null,
+      checkoutExpiresAt: null,
+      checkoutSessionId: null,
+    })
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.checkoutReservationKey, reservationKey)
+      )
+    );
+}
+
+export function canReplaceAmbiguousCheckoutReservation(
+  reservation: SubscriptionCheckoutReservation
+) {
+  return (
+    Date.now() - reservation.reservedAt.getTime() >=
+    CHECKOUT_RESERVATION_RETRY_MS
+  );
 }
 
 /** The single gate for paid features: active subscription required. */

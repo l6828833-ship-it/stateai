@@ -207,6 +207,12 @@ export const subscriptions = pgTable("subscriptions", {
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }),
   plan: planEnum("plan"),
   status: varchar("status", { length: 32 }).default("inactive").notNull(),
+  /** Durable checkout reservation state, isolated from webhook-managed status. */
+  checkoutReservationKey: varchar("checkoutReservationKey", { length: 128 }),
+  checkoutPlanId: varchar("checkoutPlanId", { length: 64 }),
+  checkoutReservedAt: timestamp("checkoutReservedAt"),
+  checkoutExpiresAt: timestamp("checkoutExpiresAt"),
+  checkoutSessionId: varchar("checkoutSessionId", { length: 128 }),
   /** Admin-granted or removed generations for the active billing period. */
   usageAdjustment: integer("usageAdjustment").default(0).notNull(),
   /** Period this adjustment belongs to; prevents grants leaking into renewals. */

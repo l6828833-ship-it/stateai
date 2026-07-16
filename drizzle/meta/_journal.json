@@ -8,6 +8,20 @@
       "when": 1783994954619,
       "tag": "0000_empty_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784201000000,
+      "tag": "0001_admin_console",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784204000000,
+      "tag": "0002_checkout_reservations",
+      "breakpoints": true
     }
   ]
 }
