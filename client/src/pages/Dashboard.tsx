@@ -41,7 +41,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-type DashSection = "create" | "videos" | "analytics";
+type DashSection = "overview" | "create" | "videos" | "analytics";
 type PendingAdditionalVideo = { sessionId: string; jobId?: number };
 
 const PENDING_ADDITIONAL_VIDEO_KEY = "estatetour_pending_additional_video";
@@ -92,8 +92,45 @@ function StatusBadge({
   );
 }
 
+function DashboardLoadError({
+  title,
+  message,
+  onRetry,
+}: {
+  title: string;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-16">
+      <section className="w-full max-w-lg rounded-3xl border border-zinc-200 bg-card p-8 text-center shadow-[0_30px_90px_-50px_rgba(24,24,27,.5)]">
+        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-950 text-white">
+          <XCircle className="h-5 w-5" />
+        </span>
+        <h1 className="mt-6 font-display text-2xl text-foreground">{title}</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          {message}
+        </p>
+        <Button
+          type="button"
+          className="btn-springy mt-6 rounded-full px-6"
+          onClick={onRetry}
+        >
+          <RefreshCw className="mr-2 h-4 w-4" /> Try again
+        </Button>
+      </section>
+    </main>
+  );
+}
+
 export default function Dashboard() {
-  const { user, loading: authLoading, isAuthenticated } = useAuth();
+  const {
+    user,
+    loading: authLoading,
+    isAuthenticated,
+    error: authError,
+    refresh: refreshAuth,
+  } = useAuth();
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
 
@@ -105,7 +142,8 @@ export default function Dashboard() {
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [draftSyncing, setDraftSyncing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState<DashSection>("create");
+  const [activeSection, setActiveSection] =
+    useState<DashSection>("overview");
   const draftSyncedRef = useRef(false);
   const pricingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -161,10 +199,16 @@ export default function Dashboard() {
       navigate("/change-password");
       return;
     }
-    if (!authLoading && !isAuthenticated) {
+    if (!authLoading && !isAuthenticated && !authError) {
       navigate("/login");
     }
-  }, [authLoading, isAuthenticated, navigate, user?.forcePasswordChange]);
+  }, [
+    authError,
+    authLoading,
+    isAuthenticated,
+    navigate,
+    user?.forcePasswordChange,
+  ]);
 
   useEffect(() => {
     try {
@@ -395,8 +439,20 @@ export default function Dashboard() {
     });
   };
 
+  const revealOutputTheater = useCallback(() => {
+    setActiveSection("create");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById("output-theater")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    });
+  }, []);
+
   const handleGenerate = useCallback(async () => {
     if (!project) return;
+    setActiveSection("create");
     const state = utils.tour.getState.getData();
     const imgs = state?.images ?? [];
     if (imgs.length === 0) {
@@ -420,18 +476,14 @@ export default function Dashboard() {
       setFakePreviewComplete(false);
       setActiveJobId(null);
       setTheaterMode("fake");
-      document
-        .getElementById("output-theater")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      revealOutputTheater();
       return;
     }
 
     // SUBSCRIBER: real, costly generation.
     try {
       setTheaterMode("real");
-      document
-        .getElementById("output-theater")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      revealOutputTheater();
       const job = await generateMutation.mutateAsync({
         projectId: project.id,
         ...(pendingAdditionalVideo
@@ -462,7 +514,13 @@ export default function Dashboard() {
       jobsQuery.refetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fakePreviewComplete, pendingAdditionalVideo, project?.id, theaterMode]);
+  }, [
+    fakePreviewComplete,
+    pendingAdditionalVideo,
+    project?.id,
+    revealOutputTheater,
+    theaterMode,
+  ]);
 
   const handleGenerateRef = useRef<typeof handleGenerate | null>(null);
   useEffect(() => {
@@ -578,7 +636,25 @@ export default function Dashboard() {
       </div>
     );
   }
+  if (authError) {
+    return (
+      <DashboardLoadError
+        title="We couldn't verify your session"
+        message="The dashboard could not reach the authentication service. Check your connection and try again."
+        onRetry={() => void refreshAuth()}
+      />
+    );
+  }
   if (!isAuthenticated) return null;
+  if (stateQuery.isError && !stateQuery.data) {
+    return (
+      <DashboardLoadError
+        title="We couldn't load your studio"
+        message="Your project data is temporarily unavailable. Please try again."
+        onRetry={() => void stateQuery.refetch()}
+      />
+    );
+  }
 
   const toolImages: ToolImage[] = serverImages.map(img => ({
     id: img.id,
@@ -593,23 +669,62 @@ export default function Dashboard() {
 
   const firstImageUrl = toolImages[0]?.previewUrl ?? null;
   const jobs = jobsQuery.data ?? [];
+  const jobsResolved = jobsQuery.data !== undefined;
   const readyCount = jobs.filter(j => j.status === "ready").length;
   const processingCount = jobs.filter(j => j.status === "processing").length;
 
-  const sectionTitle =
-    activeSection === "videos"
-      ? "Your videos"
-      : activeSection === "analytics"
-        ? "Analytics"
-        : `Welcome back${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`;
-  const sectionSubtitle =
-    activeSection === "videos"
-      ? "Every tour you've generated, ready to download and share."
-      : activeSection === "analytics"
-        ? "A quick look at your studio activity."
-        : "Your studio is exactly as you left it — photos, order, and settings included.";
+  const sectionCopy: Record<DashSection, { title: string; subtitle: string }> = {
+    overview: {
+      title: `Welcome back${user?.name ? `, ${user.name.split(" ")[0]}` : ""}`,
+      subtitle: "Your studio overview, recent videos, and current project.",
+    },
+    create: {
+      title: "Create a tour",
+      subtitle: "Upload, arrange, and turn listing photos into a cinematic video.",
+    },
+    videos: {
+      title: "Your videos",
+      subtitle: "Every tour you've generated, ready to download and share.",
+    },
+    analytics: {
+      title: "Analytics",
+      subtitle: "A quick look at your studio activity.",
+    },
+  };
+  const { title: sectionTitle, subtitle: sectionSubtitle } =
+    sectionCopy[activeSection];
 
-  const HistoryList = () => (
+  const HistoryList = ({ limit }: { limit?: number }) => {
+    if (jobsQuery.isLoading) {
+      return (
+        <div className="space-y-3" aria-label="Loading videos">
+          <Skeleton className="h-20 w-full rounded-2xl" />
+          <Skeleton className="h-20 w-full rounded-2xl" />
+        </div>
+      );
+    }
+    if (jobsQuery.isError && !jobsQuery.data) {
+      return (
+        <div className="rounded-2xl border border-border bg-card/50 p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Your video history could not be loaded.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="btn-springy mt-3 rounded-full"
+            onClick={() => void jobsQuery.refetch()}
+          >
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Try again
+          </Button>
+        </div>
+      );
+    }
+
+    const visibleJobs = typeof limit === "number" ? jobs.slice(0, limit) : jobs;
+
+    return (
     <>
       {jobs.length === 0 ? (
         <div className="rounded-2xl border border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
@@ -617,7 +732,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <ul className="space-y-3">
-          {jobs.map(job => (
+          {visibleJobs.map(job => (
             <li
               key={job.id}
               className="soft-card-hover flex items-center gap-3 rounded-2xl border border-border bg-card/70 p-3"
@@ -705,7 +820,8 @@ export default function Dashboard() {
         </ul>
       )}
     </>
-  );
+    );
+  };
 
   return (
     <div className="relative flex min-h-screen bg-background">
@@ -803,10 +919,107 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {stateQuery.isError && stateQuery.data && (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-300 bg-card p-4 text-sm text-muted-foreground">
+              <span>
+                Showing your saved studio data while we reconnect to the server.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="btn-springy rounded-full"
+                onClick={() => void stateQuery.refetch()}
+              >
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Reconnect
+              </Button>
+            </div>
+          )}
+
           {draftSyncing && (
             <div className="mb-6 flex items-center gap-3 rounded-2xl border border-ring/50 bg-accent/40 p-4 text-sm text-accent-foreground">
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
               Restoring the photos and settings you prepared on the homepage…
+            </div>
+          )}
+
+          {/* ===== OVERVIEW SECTION ===== */}
+          {activeSection === "overview" && (
+            <div className="space-y-8">
+              <div className="grid gap-4 sm:grid-cols-3">
+                {[
+                  {
+                    label: "Project photos",
+                    value: serverImages.length,
+                    icon: Clapperboard,
+                  },
+                  {
+                    label: "Videos ready",
+                    value: jobsResolved ? readyCount : "—",
+                    icon: BadgeCheck,
+                  },
+                  {
+                    label: "Total videos",
+                    value: jobsResolved ? jobs.length : "—",
+                    icon: Film,
+                  },
+                ].map(item => (
+                  <div key={item.label} className="glass-panel rounded-2xl p-5">
+                    <div className="flex items-center justify-between">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent">
+                        <item.icon className="h-5 w-5 text-primary" />
+                      </span>
+                      <span className="text-3xl font-semibold text-foreground">
+                        {item.value}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {item.label}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)]">
+                <section className="glass-panel rounded-3xl p-6 sm:p-8">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-zinc-950 px-3 py-1 text-xs font-medium text-white">
+                    <Sparkles className="h-3.5 w-3.5" /> Current project
+                  </span>
+                  <h2 className="mt-5 font-display text-2xl text-foreground">
+                    Continue building your property tour
+                  </h2>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                    Your project has {serverImages.length} photo
+                    {serverImages.length === 1 ? "" : "s"}. Add more images,
+                    arrange the sequence, and generate your next video.
+                  </p>
+                  <Button
+                    type="button"
+                    className="btn-springy mt-6 rounded-full px-5"
+                    onClick={handleCreateClick}
+                  >
+                    <Clapperboard className="mr-2 h-4 w-4" /> Open tour builder
+                  </Button>
+                </section>
+
+                <section>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <History className="h-4 w-4 text-primary" /> Recent videos
+                    </h2>
+                    {jobs.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => goToSection("videos")}
+                        className="text-xs font-medium text-primary hover:underline"
+                      >
+                        View all
+                      </button>
+                    )}
+                  </div>
+                  <HistoryList limit={3} />
+                </section>
+              </div>
             </div>
           )}
 
@@ -887,6 +1100,7 @@ export default function Dashboard() {
                     </h2>
                     {jobs.length > 0 && (
                       <button
+                        type="button"
                         onClick={() => goToSection("videos")}
                         className="text-xs font-medium text-primary hover:underline"
                       >
@@ -894,7 +1108,7 @@ export default function Dashboard() {
                       </button>
                     )}
                   </div>
-                  <HistoryList />
+                  <HistoryList limit={3} />
                 </section>
               </div>
             </div>
@@ -914,17 +1128,17 @@ export default function Dashboard() {
                 {[
                   {
                     label: "Videos ready",
-                    value: readyCount,
+                    value: jobsResolved ? readyCount : "—",
                     icon: BadgeCheck,
                   },
                   {
                     label: "Rendering now",
-                    value: processingCount,
+                    value: jobsResolved ? processingCount : "—",
                     icon: Sparkles,
                   },
                   {
                     label: "Total generated",
-                    value: jobs.length,
+                    value: jobsResolved ? jobs.length : "—",
                     icon: TrendingUp,
                   },
                 ].map(s => (
@@ -974,7 +1188,7 @@ export default function Dashboard() {
                 <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-primary" />{" "}
-                    {readyCount} tours ready to share
+                    {jobsResolved ? readyCount : "—"} tours ready to share
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-primary" />{" "}
