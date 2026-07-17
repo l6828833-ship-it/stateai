@@ -642,6 +642,79 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ===== Pricing ===== */}
+      <section
+        id="pricing"
+        className="relative scroll-mt-24 overflow-hidden py-24"
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(24,24,27,.08),transparent_46%)]" />
+        <div className="container relative">
+          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+              Pricing that scales
+            </span>
+            <h2 className="mt-3 font-display text-3xl text-foreground sm:text-4xl">
+              One studio. Three ways to grow.
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Switch between monthly and yearly billing. Every tier includes
+              1080p video, all aspect ratios, viral effects, and no watermark.
+            </p>
+          </div>
+          <PricingCards
+            className="reveal-on-scroll mx-auto mt-12 max-w-6xl"
+            promoUserKey={user?.id ?? "guest"}
+            onSelectPlan={async (planId: PlanId) => {
+              if (!isAuthenticated) {
+                try {
+                  localStorage.setItem("estatetour_selected_plan", planId);
+                } catch {}
+                navigate("/signup");
+                return;
+              }
+              try {
+                const response = await fetch(
+                  `/api/billing/checkout?plan=${planId}`,
+                  { method: "POST" }
+                );
+                const data = (await response.json()) as {
+                  url?: string;
+                  error?: string;
+                };
+                if (data.url) window.location.href = data.url;
+                else toast.error(data.error || "Could not start checkout");
+              } catch {
+                toast.error(
+                  "Could not start checkout. Check your connection and try again."
+                );
+              }
+            }}
+          />
+          <PayAsYouGoCard
+            className="reveal-on-scroll mx-auto mt-6 max-w-6xl"
+            deferRateToDashboard={isAuthenticated}
+            onAction={() => {
+              if (!isAuthenticated) {
+                try {
+                  localStorage.setItem(
+                    "estatetour_buy_one_video_after_auth",
+                    "true"
+                  );
+                } catch {}
+                navigate("/signup");
+                return;
+              }
+              navigate("/dashboard");
+            }}
+            actionLabel={
+              isAuthenticated
+                ? "View your rate in Dashboard"
+                : "Sign up and buy · $17"
+            }
+          />
+        </div>
+      </section>
+
       {/* ===== How it works ===== */}
       <section id="how-it-works" className="relative scroll-mt-24 py-24">
         <div className="container">
@@ -800,79 +873,6 @@ export default function Home() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* ===== Pricing ===== */}
-      <section
-        id="pricing"
-        className="relative scroll-mt-24 overflow-hidden py-24"
-      >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(24,24,27,.08),transparent_46%)]" />
-        <div className="container relative">
-          <div className="reveal-on-scroll mx-auto max-w-2xl text-center">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-              Pricing that scales
-            </span>
-            <h2 className="mt-3 font-display text-3xl text-foreground sm:text-4xl">
-              One studio. Three ways to grow.
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              Switch between monthly and yearly billing. Every tier includes
-              1080p video, all aspect ratios, viral effects, and no watermark.
-            </p>
-          </div>
-          <PricingCards
-            className="reveal-on-scroll mx-auto mt-12 max-w-6xl"
-            promoUserKey={user?.id ?? "guest"}
-            onSelectPlan={async (planId: PlanId) => {
-              if (!isAuthenticated) {
-                try {
-                  localStorage.setItem("estatetour_selected_plan", planId);
-                } catch {}
-                navigate("/signup");
-                return;
-              }
-              try {
-                const response = await fetch(
-                  `/api/billing/checkout?plan=${planId}`,
-                  { method: "POST" }
-                );
-                const data = (await response.json()) as {
-                  url?: string;
-                  error?: string;
-                };
-                if (data.url) window.location.href = data.url;
-                else toast.error(data.error || "Could not start checkout");
-              } catch {
-                toast.error(
-                  "Could not start checkout. Check your connection and try again."
-                );
-              }
-            }}
-          />
-          <PayAsYouGoCard
-            className="reveal-on-scroll mx-auto mt-6 max-w-6xl"
-            deferRateToDashboard={isAuthenticated}
-            onAction={() => {
-              if (!isAuthenticated) {
-                try {
-                  localStorage.setItem(
-                    "estatetour_buy_one_video_after_auth",
-                    "true"
-                  );
-                } catch {}
-                navigate("/signup");
-                return;
-              }
-              navigate("/dashboard");
-            }}
-            actionLabel={
-              isAuthenticated
-                ? "View your rate in Dashboard"
-                : "Sign up and buy · $17"
-            }
-          />
         </div>
       </section>
 
