@@ -8,6 +8,7 @@ import TourTool, {
   type ToolSettings,
 } from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
+import Logo from "@/components/Logo";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
 import type { PlanId } from "@shared/plans";
@@ -320,9 +321,7 @@ export default function Home() {
             onClick={() => scrollToSection("top")}
             className="flex items-center gap-2 font-display text-lg text-foreground"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
-              <Clapperboard className="h-4 w-4" />
-            </span>
+            <Logo className="h-8 w-8" />
             EstateTour AI
           </button>
 
@@ -919,8 +918,8 @@ export default function Home() {
       <footer className="mt-8 border-t border-border/70 py-10">
         <div className="container flex flex-col items-center justify-between gap-4 sm:flex-row">
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Clapperboard className="h-4 w-4 text-primary" /> EstateTour AI ·
-            Cinematic property tours
+            <Logo className="h-5 w-5 rounded-md" /> EstateTour AI · Cinematic
+            property tours
           </span>
           <nav className="flex flex-wrap gap-6 text-sm text-muted-foreground">
             <button

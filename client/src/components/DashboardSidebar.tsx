@@ -5,7 +5,6 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import {
   BarChart3,
-  Clapperboard,
   CreditCard,
   Crown,
   Film,
@@ -19,6 +18,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import Logo from "@/components/Logo";
 import { cn } from "@/lib/utils";
 import { planForStoredId } from "@shared/plans";
 
@@ -113,7 +113,8 @@ export default function DashboardSidebar({
         <div
           className="pointer-events-none absolute -top-10 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full opacity-40 blur-3xl"
           style={{
-            background: "radial-gradient(circle, rgba(255,255,255,.18) 0%, transparent 70%)",
+            background:
+              "radial-gradient(circle, rgba(255,255,255,.18) 0%, transparent 70%)",
           }}
         />
 
@@ -121,9 +122,7 @@ export default function DashboardSidebar({
         <div
           className={cn(
             "relative flex h-16 shrink-0 items-center px-5",
-            desktopCollapsed
-              ? "justify-between lg:px-1"
-              : "justify-between"
+            desktopCollapsed ? "justify-between lg:px-1" : "justify-between"
           )}
         >
           <a
@@ -131,16 +130,18 @@ export default function DashboardSidebar({
             className="flex items-center gap-2 font-display text-lg text-white"
             title="EstateTour home"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm">
-              <Clapperboard className="h-4 w-4" />
+            <Logo className="h-9 w-9 ring-white/15" />
+            <span className={cn(desktopCollapsed && "lg:hidden")}>
+              EstateTour
             </span>
-            <span className={cn(desktopCollapsed && "lg:hidden")}>EstateTour</span>
           </a>
           <button
             type="button"
             onClick={onToggleDesktop}
             className="hidden rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white lg:inline-flex"
-            aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={
+              desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"
+            }
             title={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {desktopCollapsed ? (
@@ -176,13 +177,13 @@ export default function DashboardSidebar({
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-zinc-950">
               {user?.name?.charAt(0).toUpperCase() ?? "U"}
             </div>
-            <div className={cn("min-w-0 flex-1", desktopCollapsed && "lg:hidden")}>
+            <div
+              className={cn("min-w-0 flex-1", desktopCollapsed && "lg:hidden")}
+            >
               <p className="truncate text-sm font-medium text-white">
                 {user?.name ?? "User"}
               </p>
-              <p className="truncate text-xs text-white/50">
-                {user?.email}
-              </p>
+              <p className="truncate text-xs text-white/50">{user?.email}</p>
             </div>
           </div>
 
@@ -210,7 +211,9 @@ export default function DashboardSidebar({
                   title={desktopCollapsed ? item.label : undefined}
                   className={cn(
                     "group flex w-full items-center rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
-                    desktopCollapsed ? "gap-3 lg:justify-center lg:px-2" : "gap-3",
+                    desktopCollapsed
+                      ? "gap-3 lg:justify-center lg:px-2"
+                      : "gap-3",
                     active
                       ? "bg-white text-zinc-950 shadow-sm"
                       : "text-white/55 hover:bg-white/10 hover:text-white"
@@ -285,71 +288,67 @@ export default function DashboardSidebar({
                   <span className="text-lg font-semibold leading-none text-white">
                     {s.value}
                   </span>
-                  <span className="text-[10px] text-white/50">
-                    {s.label}
-                  </span>
+                  <span className="text-[10px] text-white/50">{s.label}</span>
                 </div>
               ))}
             </div>
 
-          {/* Subscription / Upgrade card */}
-          <div className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="mb-1 flex items-center gap-2">
-              {subscribed ? (
-                <Crown className="h-4 w-4 text-white/65" />
-              ) : (
-                <Zap className="h-4 w-4 text-white/65" />
-              )}
-              <p className="text-sm font-semibold text-white">
-                {planLabel}
+            {/* Subscription / Upgrade card */}
+            <div className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="mb-1 flex items-center gap-2">
+                {subscribed ? (
+                  <Crown className="h-4 w-4 text-white/65" />
+                ) : (
+                  <Zap className="h-4 w-4 text-white/65" />
+                )}
+                <p className="text-sm font-semibold text-white">{planLabel}</p>
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                {subscribed
+                  ? "Cinematic 1080p generations without watermarks."
+                  : "Buy one Starter-feature video for $17, or choose a plan."}
               </p>
+              {subscribed ? (
+                <div className="space-y-2">
+                  <Button
+                    size="sm"
+                    className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
+                    onClick={onBuyAdditionalVideo}
+                  >
+                    <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video
+                    {additionalVideoPriceUsd
+                      ? ` · $${additionalVideoPriceUsd}`
+                      : ""}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                    onClick={onBillingClick}
+                  >
+                    <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Button
+                    size="sm"
+                    className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
+                    onClick={onBuyAdditionalVideo}
+                  >
+                    <Zap className="mr-1.5 h-3.5 w-3.5" /> One video · $17
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                    onClick={onUpgradeClick}
+                  >
+                    <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
+                  </Button>
+                </div>
+              )}
             </div>
-            <p className="mb-3 text-xs text-white/50">
-              {subscribed
-                ? "Cinematic 1080p generations without watermarks."
-                : "Buy one Starter-feature video for $17, or choose a plan."}
-            </p>
-            {subscribed ? (
-              <div className="space-y-2">
-                <Button
-                  size="sm"
-                  className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
-                  onClick={onBuyAdditionalVideo}
-                >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" /> Add video
-                  {additionalVideoPriceUsd
-                    ? ` · $${additionalVideoPriceUsd}`
-                    : ""}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                  onClick={onBillingClick}
-                >
-                  <CreditCard className="mr-1.5 h-3.5 w-3.5" /> Manage billing
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Button
-                  size="sm"
-                  className="btn-springy w-full rounded-full bg-white text-zinc-950 hover:bg-zinc-200"
-                  onClick={onBuyAdditionalVideo}
-                >
-                  <Zap className="mr-1.5 h-3.5 w-3.5" /> One video · $17
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="btn-springy w-full rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                  onClick={onUpgradeClick}
-                >
-                  <Crown className="mr-1.5 h-3.5 w-3.5" /> See plans
-                </Button>
-              </div>
-            )}
-          </div>
           </div>
         </div>
 
@@ -367,14 +366,18 @@ export default function DashboardSidebar({
             title={desktopCollapsed ? "Sign out" : undefined}
             className={cn(
               "btn-springy w-full text-white/55 hover:bg-white/10 hover:text-white",
-              desktopCollapsed ? "justify-start lg:justify-center lg:px-2" : "justify-start"
+              desktopCollapsed
+                ? "justify-start lg:justify-center lg:px-2"
+                : "justify-start"
             )}
             onClick={handleLogout}
           >
             <LogOut
               className={cn("h-4 w-4", desktopCollapsed ? "lg:mr-0" : "mr-2")}
             />
-            <span className={cn(desktopCollapsed && "lg:hidden")}>Sign out</span>
+            <span className={cn(desktopCollapsed && "lg:hidden")}>
+              Sign out
+            </span>
           </Button>
         </div>
       </aside>
