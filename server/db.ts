@@ -693,6 +693,7 @@ export async function getSubscriptionAccess(
     .select({
       plan: subscriptions.plan,
       status: subscriptions.status,
+      billingSource: subscriptions.billingSource,
       currentPeriodEnd: subscriptions.currentPeriodEnd,
     })
     .from(subscriptions)
@@ -703,8 +704,14 @@ export async function getSubscriptionAccess(
   const statusActive =
     subscription.status === "active" || subscription.status === "trialing";
   const periodActive =
-    !subscription.currentPeriodEnd ||
-    subscription.currentPeriodEnd.getTime() >= Date.now() - 24 * 3600 * 1000;
+    subscription.billingSource === "admin"
+      ? Boolean(
+          subscription.currentPeriodEnd &&
+          subscription.currentPeriodEnd.getTime() >= Date.now()
+        )
+      : !subscription.currentPeriodEnd ||
+        subscription.currentPeriodEnd.getTime() >=
+          Date.now() - 24 * 3600 * 1000;
   return {
     plan: subscription.plan,
     subscribed: statusActive && periodActive,
@@ -727,6 +734,7 @@ export async function upsertSubscription(
   patch: Partial<{
     stripeCustomerId: string;
     stripeSubscriptionId: string;
+    billingSource: "stripe" | "admin";
     plan:
       | "starter_monthly"
       | "starter_yearly"
@@ -775,6 +783,148 @@ export async function upsertSubscription(
   return getSubscription(userId);
 }
 
+/**
+ * Apply Stripe state only when it belongs to the authoritative subscription.
+ * The shared checkout lock serializes Stripe completion with admin grants and
+ * prevents delayed events from an old subscription replacing a newer source.
+ */
+export async function upsertStripeSubscription(
+  userId: number,
+  input: {
+    stripeCustomerId: string;
+    stripeSubscriptionId: string;
+    plan:
+      | "starter_monthly"
+      | "starter_yearly"
+      | "creator_monthly"
+      | "creator_yearly"
+      | "studio_monthly"
+      | "studio_yearly"
+      | "starter"
+      | "pro"
+      | "annual"
+      | "business"
+      | null;
+    status: string;
+    currentPeriodStart?: Date;
+    currentPeriodEnd?: Date;
+    checkoutReservationKey?: string;
+    clearCheckoutReservation: boolean;
+  }
+): Promise<boolean> {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+
+  return database.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    const [existing] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+    const reservationMatches = Boolean(
+      input.checkoutReservationKey &&
+      existing?.checkoutReservationKey === input.checkoutReservationKey
+    );
+    const sameSubscription =
+      existing?.stripeSubscriptionId === input.stripeSubscriptionId;
+    // A dead Stripe subscription must not block a new authoritative one, but an
+    // admin grant or a still-live different subscription always wins over an
+    // unrelated (possibly stale/out-of-order) event.
+    const existingIsTerminalStripe = Boolean(
+      existing?.billingSource === "stripe" &&
+      ["inactive", "canceled", "incomplete_expired"].includes(existing.status)
+    );
+
+    if (
+      existing &&
+      !sameSubscription &&
+      !reservationMatches &&
+      !existingIsTerminalStripe &&
+      (existing.billingSource === "admin" || existing.stripeSubscriptionId)
+    ) {
+      return false;
+    }
+
+    const periodChanged = Boolean(
+      input.currentPeriodEnd &&
+      existing?.currentPeriodEnd?.getTime() !== input.currentPeriodEnd.getTime()
+    );
+    const clearReservation =
+      input.clearCheckoutReservation && reservationMatches;
+    const values = {
+      stripeCustomerId: input.stripeCustomerId,
+      stripeSubscriptionId: input.stripeSubscriptionId,
+      billingSource: "stripe" as const,
+      plan: input.plan,
+      status: input.status,
+      ...(input.currentPeriodStart
+        ? { currentPeriodStart: input.currentPeriodStart }
+        : {}),
+      ...(input.currentPeriodEnd
+        ? { currentPeriodEnd: input.currentPeriodEnd }
+        : {}),
+      ...(periodChanged
+        ? {
+            usageAdjustment: 0,
+            usageAdjustmentPeriodEnd: input.currentPeriodEnd,
+          }
+        : {}),
+      ...(clearReservation
+        ? {
+            checkoutReservationKey: null,
+            checkoutPlanId: null,
+            checkoutReservedAt: null,
+            checkoutExpiresAt: null,
+            checkoutSessionId: null,
+          }
+        : {}),
+    };
+
+    if (existing) {
+      await tx
+        .update(subscriptions)
+        .set(values)
+        .where(eq(subscriptions.userId, userId));
+    } else {
+      await tx.insert(subscriptions).values({ userId, ...values });
+    }
+    return true;
+  });
+}
+
+/**
+ * Repair missing Stripe billing periods without disturbing billing authority.
+ * The write is conditioned on the row still being the same Stripe subscription
+ * so it can never overwrite an admin grant committed in the meantime.
+ */
+export async function refreshStripeSubscriptionPeriod(
+  userId: number,
+  expectedStripeSubscriptionId: string,
+  period: { currentPeriodStart: Date; currentPeriodEnd: Date }
+): Promise<boolean> {
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
+  return database.transaction(async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    const updated = await tx
+      .update(subscriptions)
+      .set({
+        currentPeriodStart: period.currentPeriodStart,
+        currentPeriodEnd: period.currentPeriodEnd,
+      })
+      .where(
+        and(
+          eq(subscriptions.userId, userId),
+          eq(subscriptions.billingSource, "stripe"),
+          eq(subscriptions.stripeSubscriptionId, expectedStripeSubscriptionId)
+        )
+      )
+      .returning({ id: subscriptions.id });
+    return updated.length === 1;
+  });
+}
+
 export async function findSubscriptionByCustomerId(stripeCustomerId: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -787,6 +937,33 @@ export async function findSubscriptionByCustomerId(stripeCustomerId: string) {
 }
 
 const CHECKOUT_RESERVATION_RETRY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Add whole months or years while clamping to the last valid day, so a grant
+ * created on Jan 31 ends Feb 28/29 rather than rolling into March, matching how
+ * Stripe anchors billing dates.
+ */
+function addBillingInterval(from: Date, interval: "month" | "year"): Date {
+  const year = from.getUTCFullYear() + (interval === "year" ? 1 : 0);
+  const month = from.getUTCMonth() + (interval === "month" ? 1 : 0);
+  const targetYear = year + Math.floor(month / 12);
+  const targetMonth = ((month % 12) + 12) % 12;
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(targetYear, targetMonth + 1, 0)
+  ).getUTCDate();
+  const day = Math.min(from.getUTCDate(), lastDayOfTargetMonth);
+  return new Date(
+    Date.UTC(
+      targetYear,
+      targetMonth,
+      day,
+      from.getUTCHours(),
+      from.getUTCMinutes(),
+      from.getUTCSeconds(),
+      from.getUTCMilliseconds()
+    )
+  );
+}
 
 export type SubscriptionCheckoutReservation = {
   key: string;
@@ -866,7 +1043,8 @@ export async function reserveSubscriptionCheckout(
       .returning();
     if (!reserved) throw new Error("Could not reserve subscription checkout");
     const reservation = checkoutReservationFromRow(reserved, true);
-    if (!reservation) throw new Error("Could not reserve subscription checkout");
+    if (!reservation)
+      throw new Error("Could not reserve subscription checkout");
     return reservation;
   });
 }
@@ -881,6 +1059,17 @@ export async function replaceSubscriptionCheckoutReservation(
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(714003, ${userId})`);
+    const [current] = await tx
+      .select({ key: subscriptions.checkoutReservationKey })
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+    // The expiration webhook may already have cleared previousKey. Replace a
+    // clear row, but never overwrite a newer reservation from another request.
+    if (!current || (current.key !== null && current.key !== previousKey)) {
+      return null;
+    }
+
     const reservedAt = new Date();
     const expiresAt = new Date(reservedAt.getTime() + 35 * 60 * 1000);
     const key = `subscription_checkout_${userId}_${reservedAt.getTime()}`;
@@ -896,7 +1085,10 @@ export async function replaceSubscriptionCheckoutReservation(
       .where(
         and(
           eq(subscriptions.userId, userId),
-          eq(subscriptions.checkoutReservationKey, previousKey)
+          or(
+            eq(subscriptions.checkoutReservationKey, previousKey),
+            isNull(subscriptions.checkoutReservationKey)
+          )
         )
       )
       .returning();
@@ -986,9 +1178,10 @@ export async function hasActiveSubscription(userId: number): Promise<boolean> {
   const sub = await getSubscription(userId);
   if (!sub) return false;
   if (sub.status !== "active" && sub.status !== "trialing") return false;
+  const periodGraceMs = sub.billingSource === "stripe" ? 24 * 3600 * 1000 : 0;
   if (
     sub.currentPeriodEnd &&
-    sub.currentPeriodEnd.getTime() < Date.now() - 24 * 3600 * 1000
+    sub.currentPeriodEnd.getTime() < Date.now() - periodGraceMs
   ) {
     return false;
   }
@@ -1063,6 +1256,7 @@ export async function listUsersForAdmin(input: {
         usageAdjustmentPeriodEnd: subscriptions.usageAdjustmentPeriodEnd,
         stripeCustomerId: subscriptions.stripeCustomerId,
         stripeSubscriptionId: subscriptions.stripeSubscriptionId,
+        billingSource: subscriptions.billingSource,
       })
       .from(users)
       .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
@@ -1176,6 +1370,7 @@ export async function getUserForAdmin(userId: number) {
       usageAdjustmentPeriodEnd: subscriptions.usageAdjustmentPeriodEnd,
       stripeCustomerId: subscriptions.stripeCustomerId,
       stripeSubscriptionId: subscriptions.stripeSubscriptionId,
+      billingSource: subscriptions.billingSource,
     })
     .from(users)
     .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
@@ -1496,6 +1691,80 @@ export async function revokeUserSessionsByAdmin(input: {
   });
 }
 
+export async function setAdminManagedPlan(input: {
+  targetUserId: number;
+  planId: PlanId;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(714003, ${input.targetUserId})`
+    );
+    await assertTargetUser(tx, input.targetUserId);
+    const [existing] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, input.targetUserId))
+      .limit(1);
+    if (
+      existing?.billingSource === "stripe" &&
+      existing.stripeSubscriptionId &&
+      !["inactive", "canceled", "incomplete_expired"].includes(existing.status)
+    ) {
+      throw new Error(
+        "This user has a live Stripe subscription; use the Stripe-backed plan change"
+      );
+    }
+    if (existing?.checkoutReservationKey) {
+      throw new Error(
+        "This user has a subscription checkout in progress. Wait for it to finish or expire before granting a plan."
+      );
+    }
+
+    const now = new Date();
+    const sameAdminCadence = Boolean(
+      existing?.billingSource === "admin" &&
+      existing.plan &&
+      isPlanId(existing.plan) &&
+      PLAN_BY_ID[existing.plan].interval === PLAN_BY_ID[input.planId].interval
+    );
+    const keepCurrentPeriod = Boolean(
+      sameAdminCadence &&
+      existing?.currentPeriodStart &&
+      existing.currentPeriodEnd &&
+      existing.currentPeriodEnd.getTime() > now.getTime() &&
+      (existing.status === "active" || existing.status === "trialing")
+    );
+    const periodStart = keepCurrentPeriod ? existing!.currentPeriodStart! : now;
+    const periodEnd = keepCurrentPeriod
+      ? existing!.currentPeriodEnd!
+      : addBillingInterval(now, PLAN_BY_ID[input.planId].interval);
+    const values = {
+      stripeSubscriptionId: null,
+      billingSource: "admin" as const,
+      plan: input.planId,
+      status: "active",
+      currentPeriodStart: periodStart,
+      currentPeriodEnd: periodEnd,
+      usageAdjustment: 0,
+      usageAdjustmentPeriodEnd: periodEnd,
+    } as const;
+
+    if (existing) {
+      await tx
+        .update(subscriptions)
+        .set(values)
+        .where(eq(subscriptions.userId, input.targetUserId));
+    } else {
+      await tx
+        .insert(subscriptions)
+        .values({ userId: input.targetUserId, ...values });
+    }
+    return { periodStart, periodEnd };
+  });
+}
+
 export async function setUsageAdjustmentByAdmin(input: {
   actorUserId: number;
   targetUserId: number;
@@ -1512,6 +1781,15 @@ export async function setUsageAdjustmentByAdmin(input: {
       .where(eq(subscriptions.userId, input.targetUserId))
       .limit(1);
     if (!existing) throw new Error("This user has no subscription record");
+    if (
+      (existing.status !== "active" && existing.status !== "trialing") ||
+      !existing.currentPeriodEnd ||
+      existing.currentPeriodEnd.getTime() <= Date.now()
+    ) {
+      throw new Error(
+        "Usage can only be adjusted for an active billing period"
+      );
+    }
     await tx
       .update(subscriptions)
       .set({

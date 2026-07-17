@@ -84,6 +84,7 @@ export default function Admin() {
     null
   );
   const [usageAdjustment, setUsageAdjustment] = useState("0");
+  const [planSelection, setPlanSelection] = useState("");
 
   useEffect(() => {
     if (!loading && !user) navigate("/login");
@@ -120,8 +121,10 @@ export default function Admin() {
   });
 
   useEffect(() => {
-    if (detailQuery.data)
+    if (detailQuery.data) {
       setUsageAdjustment(String(detailQuery.data.usageAdjustment ?? 0));
+      setPlanSelection(detailQuery.data.plan || "");
+    }
   }, [detailQuery.data]);
 
   const refreshAdminData = async () => {
@@ -185,6 +188,23 @@ export default function Admin() {
 
   const data = usersQuery.data;
   const selected = detailQuery.data;
+  const selectedHasLiveStripeSubscription = Boolean(
+    selected?.billingSource === "stripe" &&
+    selected.stripeSubscriptionId &&
+    !["inactive", "canceled", "incomplete_expired"].includes(
+      selected.subscriptionStatus || "inactive"
+    )
+  );
+  // An admin grant stays stored as "active" past its period end, but the server
+  // stops honoring it. Surface an effective status so admins can see and renew it.
+  const selectedGrantExpired = Boolean(
+    selected?.billingSource === "admin" &&
+    selected.currentPeriodEnd &&
+    new Date(selected.currentPeriodEnd).getTime() < Date.now()
+  );
+  const selectedEffectiveStatus = selectedGrantExpired
+    ? "expired"
+    : selected?.subscriptionStatus || null;
 
   return (
     <div className="flex min-h-screen bg-background text-zinc-950">
@@ -705,7 +725,7 @@ export default function Admin() {
                       <div>
                         <p className="text-xs text-zinc-400">Payment</p>
                         <p className="mt-1 font-medium capitalize">
-                          {selected.subscriptionStatus || "No payment"}
+                          {selectedEffectiveStatus || "No payment"}
                         </p>
                       </div>
                       <div>
@@ -728,43 +748,61 @@ export default function Admin() {
                       Period ends {formatDate(selected.currentPeriodEnd)}
                     </p>
                   </div>
-                  <label className="block text-xs font-medium text-zinc-500">
-                    Stripe-backed plan change
-                    <select
-                      disabled={!selected.stripeSubscriptionId || actionPending}
-                      defaultValue={selected.plan || ""}
-                      onChange={event => {
-                        const planId = event.target.value;
-                        if (
-                          !planId ||
-                          !window.confirm(
-                            "Change this live Stripe subscription? Proration may apply."
-                          )
-                        )
-                          return;
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-500">
+                      {selectedHasLiveStripeSubscription
+                        ? "Stripe-backed plan change"
+                        : "Admin-granted plan"}
+                      <select
+                        disabled={actionPending}
+                        value={planSelection}
+                        onChange={event => setPlanSelection(event.target.value)}
+                        className="mt-1.5 h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm disabled:bg-zinc-50"
+                      >
+                        <option value="">Choose a plan</option>
+                        {plansQuery.data?.map(plan => (
+                          <option key={plan.id} value={plan.id}>
+                            {plan.name} · {plan.interval} · {plan.priceLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <Button
+                      variant="outline"
+                      disabled={
+                        actionPending ||
+                        !planSelection ||
+                        (planSelection === selected.plan &&
+                          !selectedGrantExpired)
+                      }
+                      onClick={() => {
+                        const message = selectedHasLiveStripeSubscription
+                          ? "Change this live Stripe subscription? Proration may apply."
+                          : "Grant this plan without charging the user? The plan will be active immediately.";
+                        if (!window.confirm(message)) return;
                         void runAction(
                           () =>
                             planMutation.mutateAsync({
                               userId: selected.id,
-                              planId,
+                              planId: planSelection,
                             }),
-                          "Stripe subscription updated"
+                          selectedHasLiveStripeSubscription
+                            ? "Stripe subscription updated"
+                            : "Admin-managed plan granted"
                         );
                       }}
-                      className="mt-1.5 h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm disabled:bg-zinc-50"
+                      className="mt-2 w-full rounded-xl"
                     >
-                      <option value="">
-                        {selected.stripeSubscriptionId
-                          ? "Choose a plan"
-                          : "No Stripe subscription"}
-                      </option>
-                      {plansQuery.data?.map(plan => (
-                        <option key={plan.id} value={plan.id}>
-                          {plan.name} · {plan.interval} · {plan.priceLabel}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      Save plan change
+                    </Button>
+                    {!selectedHasLiveStripeSubscription && (
+                      <p className="mt-2 text-[11px] leading-4 text-zinc-400">
+                        This grants access without charging the user. If they
+                        later subscribe, Stripe billing replaces the admin
+                        grant.
+                      </p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <Input
                       type="number"
@@ -775,7 +813,11 @@ export default function Admin() {
                     />
                     <Button
                       variant="outline"
-                      disabled={actionPending || !selected.stripeSubscriptionId}
+                      disabled={
+                        actionPending ||
+                        selected.usageAllowance === null ||
+                        !selected.currentPeriodEnd
+                      }
                       onClick={() =>
                         void runAction(
                           () =>

@@ -181,7 +181,9 @@
   }
 
   .focus-glow {
-    box-shadow: 0 0 0 3px rgb(24 24 27 / 0.14), 0 14px 35px -22px rgb(24 24 27 / 0.55);
+    box-shadow:
+      0 0 0 3px rgb(24 24 27 / 0.14),
+      0 14px 35px -22px rgb(24 24 27 / 0.55);
   }
 
   .soft-card-hover {
@@ -430,6 +432,69 @@
     animation: marquee-x 22s linear infinite;
   }
 
+  /* Hero "still photo → cinematic video" wipe reveal.
+     A glowing line sweeps left→right, clipping the photo away to expose the
+     looping video underneath, then the photo crossfades back for a seamless loop.
+     Linear timing keeps the clip edge and the scan line perfectly in sync. */
+  @keyframes hero-photo-wipe {
+    0%,
+    10% {
+      clip-path: inset(0 0 0 0);
+      opacity: 1;
+    }
+    46% {
+      clip-path: inset(0 0 0 100%);
+      opacity: 1;
+    }
+    88% {
+      clip-path: inset(0 0 0 100%);
+      opacity: 1;
+    }
+    92% {
+      clip-path: inset(0 0 0 100%);
+      opacity: 0;
+    }
+    92.5% {
+      clip-path: inset(0 0 0 0);
+      opacity: 0;
+    }
+    100% {
+      clip-path: inset(0 0 0 0);
+      opacity: 1;
+    }
+  }
+  .animate-hero-wipe {
+    animation: hero-photo-wipe 8s linear infinite;
+    will-change: clip-path, opacity;
+  }
+
+  @keyframes hero-wipe-line {
+    0%,
+    10% {
+      left: 0%;
+      opacity: 0;
+    }
+    14% {
+      opacity: 1;
+    }
+    46% {
+      left: 100%;
+      opacity: 1;
+    }
+    50% {
+      left: 100%;
+      opacity: 0;
+    }
+    100% {
+      left: 0%;
+      opacity: 0;
+    }
+  }
+  .animate-hero-wipe-line {
+    animation: hero-wipe-line 8s linear infinite;
+    will-change: left, opacity;
+  }
+
   .reveal-on-scroll {
     opacity: 0;
     transform: translateY(28px);
@@ -447,6 +512,15 @@
   .reveal-on-scroll {
     opacity: 1;
     transform: none;
+  }
+  /* No sweep for reduced-motion users: hide the photo overlay and the scan
+     line so the video is shown directly. */
+  .animate-hero-wipe {
+    animation: none;
+    opacity: 0;
+  }
+  .animate-hero-wipe-line {
+    display: none;
   }
 }
 

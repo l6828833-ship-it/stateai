@@ -11,8 +11,11 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import {
   handleAdditionalVideoCheckout,
+  handleBillingStatus,
+  handleCancelSubscription,
   handleCheckout,
   handlePortal,
+  handleResumeSubscription,
   handleWebhook,
 } from "../billing";
 import { sdk } from "./sdk";
@@ -99,6 +102,48 @@ async function startServer() {
         id: user.id,
         email: user.email,
       });
+    } catch {
+      res.status(401).json({ error: "Please sign in first" });
+    }
+  });
+  app.get("/api/billing/status", async (req, res) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user || user.forcePasswordChange) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
+        return;
+      }
+      await handleBillingStatus(req, res, { id: user.id });
+    } catch {
+      res.status(401).json({ error: "Please sign in first" });
+    }
+  });
+  app.post("/api/billing/cancel", async (req, res) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user || user.forcePasswordChange) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
+        return;
+      }
+      await handleCancelSubscription(req, res, { id: user.id });
+    } catch {
+      res.status(401).json({ error: "Please sign in first" });
+    }
+  });
+  app.post("/api/billing/resume", async (req, res) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user || user.forcePasswordChange) {
+        res
+          .status(403)
+          .json({ error: "Change your temporary password before continuing" });
+        return;
+      }
+      await handleResumeSubscription(req, res, { id: user.id });
     } catch {
       res.status(401).json({ error: "Please sign in first" });
     }

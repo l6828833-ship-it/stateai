@@ -8,8 +8,10 @@ import TourTool, {
   type ToolSettings,
 } from "@/components/TourTool";
 import { Button } from "@/components/ui/button";
+import Logo from "@/components/Logo";
 import { saveDraft, useToolDraft, type DraftImage } from "@/hooks/useToolDraft";
 import { prepareImageForUpload } from "@/lib/imageUpload";
+import { authenticatedFetch } from "@/lib/authenticatedFetch";
 import type { PlanId } from "@shared/plans";
 import {
   ArrowRight,
@@ -33,9 +35,12 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-const HERO_IMG_1 = "/manus-storage/hero-living_b05098b0.jpg";
-const HERO_IMG_2 = "/manus-storage/hero-kitchen2_815b2217.jpg";
-const HERO_IMG_3 = "/manus-storage/hero-aerial_18f0bf6c.jpg";
+/** The still listing photo shown "before" — the scan line wipes it to reveal the video. */
+const HERO_BEFORE_IMG =
+  "https://pub-1271a678a52f4664aa377c2be4276e07.r2.dev/Screenshot%202026-07-16%20233123.png";
+/** The cinematic "after" tour that the sweep reveals, looping continuously. */
+const HERO_VIDEO_URL =
+  "https://pub-1271a678a52f4664aa377c2be4276e07.r2.dev/0708(3).mp4";
 
 /** Scroll-reveal helper */
 function useReveal() {
@@ -57,25 +62,12 @@ function useReveal() {
   }, []);
 }
 
-const HERO_ROOMS = [
-  { src: HERO_IMG_1, label: "Living room" },
-  { src: HERO_IMG_2, label: "Kitchen" },
-  { src: HERO_IMG_3, label: "Aerial view" },
-];
-
-/** Hero preview card that crossfades between room shots with ken-burns motion */
+/**
+ * Hero preview card. A still listing photo is wiped away by a glowing scan line
+ * to reveal the looping cinematic tour underneath — visualizing the core
+ * "turn photos into video" promise. The photo crossfades back for a seamless loop.
+ */
 function HeroPreview() {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const t = setInterval(
-      () => setFrame(f => (f + 1) % HERO_ROOMS.length),
-      4500
-    );
-    return () => clearInterval(t);
-  }, []);
-  const current = HERO_ROOMS[frame];
-  const next = HERO_ROOMS[(frame + 1) % HERO_ROOMS.length];
-
   return (
     <div className="relative">
       {/* Floating "render time" chip */}
@@ -98,17 +90,33 @@ function HeroPreview() {
 
       <div className="glass-panel relative overflow-hidden rounded-3xl p-2 sm:p-3">
         <div className="relative aspect-video overflow-hidden rounded-2xl bg-muted">
-          {HERO_ROOMS.map((room, i) => (
-            <img
-              key={room.src}
-              src={room.src}
-              alt={`AI house tour preview — ${room.label}`}
-              className={cn(
-                "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
-                i === frame ? "opacity-100 animate-ken-burns" : "opacity-0"
-              )}
-            />
-          ))}
+          {/* Base layer: the cinematic tour video, looping */}
+          <video
+            src={HERO_VIDEO_URL}
+            poster={HERO_BEFORE_IMG}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            aria-label="AI-generated cinematic real estate tour preview"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+
+          {/* Overlay layer: the still "before" photo, wiped away to reveal the video */}
+          <img
+            src={HERO_BEFORE_IMG}
+            alt="Original listing photo before the AI cinematic tour"
+            className="animate-hero-wipe absolute inset-0 h-full w-full object-cover"
+          />
+
+          {/* The glowing scan line + soft beam that rides the wipe edge */}
+          <span className="animate-hero-wipe-line pointer-events-none absolute inset-y-0 z-10 w-24 -translate-x-1/2 bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+          <span className="animate-hero-wipe-line pointer-events-none absolute inset-y-0 z-10 w-[2px] -translate-x-1/2 bg-white shadow-[0_0_20px_5px_rgba(255,255,255,0.8)]">
+            <span className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-900 shadow-lg">
+              <Sparkles className="h-3 w-3" /> Rendering
+            </span>
+          </span>
 
           {/* Top overlay: live recording badge */}
           <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
@@ -121,25 +129,17 @@ function HeroPreview() {
             </span>
           </div>
 
-          {/* Bottom overlay: room transition caption + scrubber */}
+          {/* Bottom overlay: photo → video transformation caption + scrubber */}
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
             <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-white">
               <span className="flex items-center gap-1.5">
                 <Clapperboard className="h-3.5 w-3.5" />
-                {
-                  current.label
-                } <ArrowRight className="h-3 w-3 opacity-70" /> {next.label}
+                Listing photo
+                <ArrowRight className="h-3 w-3 opacity-70" />
+                Cinematic tour
               </span>
-              <span className="flex gap-1">
-                {HERO_ROOMS.map((_, i) => (
-                  <span
-                    key={i}
-                    className={cn(
-                      "h-1.5 rounded-full transition-all duration-500",
-                      i === frame ? "w-5 bg-white" : "w-1.5 bg-white/50"
-                    )}
-                  />
-                ))}
+              <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-semibold backdrop-blur-sm">
+                AI generated
               </span>
             </div>
             {/* Scrub track */}
@@ -320,9 +320,7 @@ export default function Home() {
             onClick={() => scrollToSection("top")}
             className="flex items-center gap-2 font-display text-lg text-foreground"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
-              <Clapperboard className="h-4 w-4" />
-            </span>
+            <Logo className="h-8 w-8" />
             EstateTour AI
           </button>
 
@@ -673,7 +671,7 @@ export default function Home() {
                 return;
               }
               try {
-                const response = await fetch(
+                const response = await authenticatedFetch(
                   `/api/billing/checkout?plan=${planId}`,
                   { method: "POST" }
                 );
@@ -919,8 +917,8 @@ export default function Home() {
       <footer className="mt-8 border-t border-border/70 py-10">
         <div className="container flex flex-col items-center justify-between gap-4 sm:flex-row">
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Clapperboard className="h-4 w-4 text-primary" /> EstateTour AI ·
-            Cinematic property tours
+            <Logo className="h-5 w-5 rounded-md" /> EstateTour AI · Cinematic
+            property tours
           </span>
           <nav className="flex flex-wrap gap-6 text-sm text-muted-foreground">
             <button
