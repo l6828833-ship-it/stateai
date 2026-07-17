@@ -58,7 +58,7 @@ describe("official Kling 3.0 request contract", () => {
       externalTaskId: "estatetour-generation-43",
     });
 
-    expect(request.contents.map((content) => content.type)).toEqual([
+    expect(request.contents.map(content => content.type)).toEqual([
       "prompt",
       "first_frame",
     ]);
@@ -74,7 +74,9 @@ describe("official Kling 3.0 request contract", () => {
     });
     const prompt = request.contents[0];
     expect(prompt.type).toBe("prompt");
-    expect("text" in prompt ? prompt.text.length : 0).toBeLessThanOrEqual(2_500);
+    expect("text" in prompt ? prompt.text.length : 0).toBeLessThanOrEqual(
+      2_500
+    );
   });
 
   it("rejects unsafe or unsupported inputs before spending provider credits", () => {
@@ -82,13 +84,19 @@ describe("official Kling 3.0 request contract", () => {
       buildKlingImageToVideoRequest({
         prompt: "Valid prompt",
         images: [
-          { sequenceIndex: 0, publicUrl: "https://media.example.test/first.jpg" },
-          { sequenceIndex: 2, publicUrl: "https://media.example.test/last.jpg" },
+          {
+            sequenceIndex: 0,
+            publicUrl: "https://media.example.test/first.jpg",
+          },
+          {
+            sequenceIndex: 2,
+            publicUrl: "https://media.example.test/last.jpg",
+          },
         ],
         duration: 5,
         aspectRatio: "1:1",
         externalTaskId: "estatetour-generation-44",
-      }),
+      })
     ).toThrow("gapless");
 
     expect(() =>
@@ -98,7 +106,7 @@ describe("official Kling 3.0 request contract", () => {
         duration: 16,
         aspectRatio: "1:1",
         externalTaskId: "estatetour-generation-45",
-      }),
+      })
     ).toThrow("3 to 15");
   });
 
@@ -114,7 +122,7 @@ describe("official Kling 3.0 request contract", () => {
   it("carries the external id on an ambiguous submission for later reconciliation", () => {
     const error = new KlingAmbiguousSubmissionError(
       "estatetour-generation-7",
-      new Error("network timeout"),
+      new Error("network timeout")
     );
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("KlingAmbiguousSubmissionError");
@@ -127,48 +135,52 @@ describe("multi-image segment planning", () => {
     const segments = planKlingSegments(orderedImages.slice(0, 1));
     expect(segments).toHaveLength(1);
     expect(segments[0].index).toBe(0);
-    expect(segments[0].images.map((i) => i.publicUrl)).toEqual([
+    expect(segments[0].images.map(i => i.publicUrl)).toEqual([
       orderedImages[0].publicUrl,
     ]);
   });
 
-  it("chains consecutive image pairs so every image is a real frame", () => {
+  it("creates one single-frame shot per image (no between-image morphs)", () => {
     const segments = planKlingSegments(orderedImages); // 3 images
-    expect(segments).toHaveLength(2); // N-1 segments
-    // Segment 0: image 0 -> image 1
-    expect(segments[0].images.map((i) => i.publicUrl)).toEqual([
-      orderedImages[0].publicUrl,
-      orderedImages[1].publicUrl,
+    expect(segments).toHaveLength(3); // one shot per image
+    expect(segments.map(s => s.index)).toEqual([0, 1, 2]);
+    // Each shot is generated from exactly one image, in order.
+    expect(segments.map(s => s.images.map(i => i.publicUrl))).toEqual([
+      [orderedImages[0].publicUrl],
+      [orderedImages[1].publicUrl],
+      [orderedImages[2].publicUrl],
     ]);
-    // Segment 1: image 1 -> image 2 (image 1 is shared, guaranteeing continuity)
-    expect(segments[1].images.map((i) => i.publicUrl)).toEqual([
-      orderedImages[1].publicUrl,
-      orderedImages[2].publicUrl,
-    ]);
-    // Each segment's frames are re-based to gapless 0/1 for the Kling contract.
-    expect(segments[1].images.map((i) => i.sequenceIndex)).toEqual([0, 1]);
+    // Each shot's single frame is re-based to index 0 for the Kling contract.
+    expect(segments.every(s => s.images[0].sequenceIndex === 0)).toBe(true);
   });
 
-  it("builds a valid two-frame Kling request from a planned segment", () => {
+  it("builds a valid single-frame Kling request from a planned shot", () => {
     const [firstSegment] = planKlingSegments(orderedImages);
     const request = buildKlingImageToVideoRequest({
-      prompt: "Cinematic transition between rooms.",
+      prompt: "Slow cinematic push-in on the living room.",
       images: firstSegment.images,
       duration: 5,
       aspectRatio: "16:9",
       externalTaskId: klingSegmentExternalTaskId(42, firstSegment.index),
     });
-    expect(request.contents.map((c) => c.type)).toEqual([
+    // A single first_frame only — no last_frame, so Kling animates within the
+    // one photo instead of morphing toward a different room.
+    expect(request.contents.map(c => c.type)).toEqual([
       "prompt",
       "first_frame",
-      "last_frame",
     ]);
-    expect(request.options.external_task_id).toBe("estatetour-generation-42-seg-0");
+    expect(request.options.external_task_id).toBe(
+      "estatetour-generation-42-seg-0"
+    );
   });
 
   it("derives deterministic, unique segment external ids", () => {
-    expect(klingSegmentExternalTaskId(7, 0)).toBe("estatetour-generation-7-seg-0");
-    expect(klingSegmentExternalTaskId(7, 3)).toBe("estatetour-generation-7-seg-3");
+    expect(klingSegmentExternalTaskId(7, 0)).toBe(
+      "estatetour-generation-7-seg-0"
+    );
+    expect(klingSegmentExternalTaskId(7, 3)).toBe(
+      "estatetour-generation-7-seg-3"
+    );
     expect(() => klingSegmentExternalTaskId(7, -1)).toThrow();
     expect(() => klingSegmentExternalTaskId(0, 0)).toThrow();
   });
@@ -186,7 +198,7 @@ describe("Kling credentials", () => {
     async () => {
       await expect(verifyKlingKey()).resolves.toBe(true);
     },
-    30_000,
+    30_000
   );
 });
 

@@ -1,11 +1,12 @@
 /**
  * Server-side video assembly — SERVER-SIDE ONLY.
  *
- * Kling generates each tour as a set of short first/last-frame segments (one
- * per consecutive image pair). This module normalizes and concatenates those
- * segments. When Kling's three-second per-segment minimum exceeds a plan's
- * advertised final duration, every complete segment is sped up proportionally
- * so no uploaded image or transition is dropped.
+ * Kling generates each tour as a set of short shots (one per uploaded image).
+ * This module normalizes every shot to the chosen output aspect ratio using a
+ * blurred fill (so vertical / off-ratio footage looks cinematic instead of
+ * showing black bars) and concatenates the shots with hard cuts. When the
+ * combined source length exceeds a plan's advertised final duration, every
+ * complete shot is sped up proportionally so no uploaded image is dropped.
  *
  * Requires `ffmpeg` and `ffprobe` on PATH (installed via nixpacks.toml aptPkgs).
  */
@@ -19,7 +20,10 @@ const MEDIA_PROCESS_TIMEOUT_MS = 180_000;
 const OUTPUT_FPS = 30;
 
 /** Target canvas per supported aspect ratio (Full HD long edge). */
-function targetDimensions(aspectRatio: string): { width: number; height: number } {
+function targetDimensions(aspectRatio: string): {
+  width: number;
+  height: number;
+} {
   switch (aspectRatio) {
     case "9:16":
       return { width: 1080, height: 1920 };
@@ -51,7 +55,9 @@ function runMediaCommand(
     const timer = setTimeout(() => {
       proc.kill("SIGKILL");
       finish(() =>
-        reject(new Error(`${command} timed out while assembling the tour video`))
+        reject(
+          new Error(`${command} timed out while assembling the tour video`)
+        )
       );
     }, MEDIA_PROCESS_TIMEOUT_MS);
 
@@ -136,10 +142,6 @@ export async function concatMp4Segments(
         ? targetDurationSeconds! / sourceTotal
         : 1;
 
-    if (segments.length === 1 && speedFactor === 1) {
-      return segments[0];
-    }
-
     const normalized = segments
       .map((_, i) => {
         const timing =
@@ -148,9 +150,16 @@ export async function concatMp4Segments(
                 sourceDurations[i] * speedFactor
               ).toFixed(6)}`
             : ",setpts=PTS-STARTPTS";
+        // Blurred-fill framing: a blurred, scaled-to-cover copy of the shot
+        // fills the whole canvas, with the shot scaled-to-fit and centered on
+        // top. Vertical or off-ratio footage then looks professional instead
+        // of sitting inside black bars.
         return (
-          `[${i}:v:0]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
-          `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1${timing},fps=${OUTPUT_FPS}[v${i}]`
+          `[${i}:v:0]split=2[bg${i}][fg${i}];` +
+          `[bg${i}]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
+          `crop=${width}:${height},scale=iw/8:ih/8,boxblur=6:1,scale=${width}:${height},setsar=1[bgb${i}];` +
+          `[fg${i}]scale=${width}:${height}:force_original_aspect_ratio=decrease,setsar=1[fgs${i}];` +
+          `[bgb${i}][fgs${i}]overlay=(${width}-w)/2:(${height}-h)/2${timing},fps=${OUTPUT_FPS}[v${i}]`
         );
       })
       .join(";");

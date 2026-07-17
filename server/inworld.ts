@@ -67,12 +67,22 @@ export interface AnalysisResult {
     target: string;
     shot_prompt: string;
   }>;
-  /** The single combined, optimized prompt for Kling. */
-  optimizedPrompt: string;
+  /**
+   * Shared cinematic style & lighting guide, reused across EVERY shot. This is
+   * a style reference, NOT one giant prompt spanning all images. Stored on the
+   * job for record-keeping.
+   */
+  styleGuide: string;
+  /**
+   * The final Kling prompt for each image's own shot, in image order. Every
+   * image is an independent single-frame shot (hard-cut together afterwards),
+   * so this always has exactly one entry per image.
+   */
+  shotPrompts: string[];
   /**
    * AI-chosen length (whole seconds) for each shot, in order. Length equals the
-   * number of shots: N-1 for an N-image tour, or 1 for a single image. Each
-   * value is clamped to [SEGMENT_MIN_DURATION, SEGMENT_MAX_DURATION].
+   * number of shots — one per image. Each value is clamped to
+   * [SEGMENT_MIN_DURATION, SEGMENT_MAX_DURATION].
    */
   segmentDurations: number[];
   /** Total video length (sum of segmentDurations), for record-keeping. */
@@ -122,9 +132,13 @@ export function normalizeSegmentDurations(
   return durations;
 }
 
-/** Number of shots (Kling tasks) for a tour of the given image count. */
+/**
+ * Number of shots (Kling tasks) for a tour of the given image count. Each image
+ * is its own independent single-frame shot; the shots are joined by hard cuts,
+ * so the shot count equals the image count (never a between-image transition).
+ */
 export function segmentCountFor(imageCount: number): number {
-  return imageCount <= 1 ? 1 : imageCount - 1;
+  return Math.max(1, imageCount);
 }
 
 /** Sensible fallback length when the AI does not return one (scales with photo count). */
@@ -155,8 +169,8 @@ export async function analyzeAndOptimizePrompt(params: {
   const segmentCount = segmentCountFor(ordered.length);
   const shotPlan =
     ordered.length <= 1
-      ? `The final video is a single shot of Image 1.`
-      : `The final video is assembled from ${segmentCount} shots played back-to-back, in order. Shot 1 animates from Image 1 to Image 2, shot 2 from Image 2 to Image 3, and so on — shot k animates from Image k to Image k+1.`;
+      ? `The final video is ONE cinematic shot generated from Image 1 alone.`
+      : `The final video is ${segmentCount} INDEPENDENT shots — exactly one per image, in order — joined by clean hard cuts. There are NO animated transitions or morphs between different photos. Each shot k is generated from Image k ALONE (a single still frame the camera gently animates within); the camera must never drift toward, pass through, or invent any space not visible in that one photo.`;
 
   const content: Array<
     | { type: "text"; text: string }
@@ -175,17 +189,18 @@ export async function analyzeAndOptimizePrompt(params: {
     type: "text",
     text: [
       `Analyze these real estate photos as ONE property, in the exact order given (the order is fixed and must not be changed).`,
-      `The photos are numbered Image 1, Image 2, … Image ${ordered.length}. Build the tour strictly in that image order: start with Image 1, then move to Image 2, then continue through the rest (Image 3, Image 4, … up to Image ${ordered.length}) without skipping, dropping, or reordering any image. Every image must appear exactly once, and each scene in your plan must reference its image by number.`,
+      `The photos are numbered Image 1, Image 2, … Image ${ordered.length}. Plan the tour strictly in that order — Image 1 first, then Image 2, and so on to Image ${ordered.length} — without skipping, dropping, reordering, or merging any image. Every image becomes EXACTLY ONE shot and must reference its image by number.`,
       `You are the film director. The client chose NO style and NO length — you decide everything creative from what you actually see in each photo.`,
-      `First identify what each photo shows (e.g. exterior facade, front yard, aerial/rooftop view, living room, kitchen, bedroom, bathroom, backyard, pool) and then pick the most impressive, appropriate cinematic treatment for EACH one:`,
-      `- Exteriors, aerial shots and large outdoor spaces → sweeping drone-style aerial reveals, slow orbits, and rising establishing moves.`,
-      `- Interior rooms → smooth first-person walkthrough glides with gentle push-ins and pans; the camera stays inside the room and NEVER passes through an unseen doorway or invents unseen space.`,
-      `- Hero details and feature spaces → elegant, slow cinematic push-ins with warm, filmic lighting.`,
-      `For each photo choose the single safest, most flattering camera move (push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend) and note the chosen style.`,
       shotPlan,
-      `For EACH shot, choose its IDEAL source length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION}. The final edit is capped at ${maxDurationSeconds} seconds; when Kling's per-shot minimum makes the source longer, post-production will speed each complete shot proportionally. Return source lengths in shot order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
-      `Then write ONE combined video-generation prompt ("optimized_prompt") describing the full tour across the images in order (Image 1 → Image 2 → … → Image ${ordered.length}), smoothly blending the per-scene styles, with concrete motion, lighting and composition language. It must instruct the model to preserve the EXACT rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, added or removed objects — the photos must stay pixel-faithful; only the camera moves. Transition between the images strictly in the given order, starting on Image 1 and ending on Image ${ordered.length}.`,
-      `Respond ONLY with JSON matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"optimized_prompt":string,"segment_durations":number[]}`,
+      `For EACH image, first identify what it shows (e.g. exterior facade, front yard, aerial/rooftop view, living room, kitchen, bedroom, bathroom, backyard, pool), then choose ONE stable, flattering camera move that stays ENTIRELY within that single photo:`,
+      `- Exteriors, aerial and large outdoor shots → a slow push_in, gentle orbit, or subtle rise that keeps the whole structure in frame.`,
+      `- Interior rooms → a slow, steady push_in or gentle pan that reveals the room without leaving it; never travel through a doorway or toward unseen space.`,
+      `- Hero details and feature spaces → a slow, elegant push_in with warm, filmic lighting.`,
+      `Pick exactly one camera_move per image from: push_in, pull_back, pan_left_to_right, pan_right_to_left, orbit, rise, descend, static. Prefer slow, subtle, STABLE motion — small amplitude, no fast or wide moves, no shaking or hand-held wobble. When in doubt, use a gentle push_in.`,
+      `For EACH shot choose its IDEAL length in WHOLE seconds between ${SEGMENT_MIN_DURATION} and ${SEGMENT_MAX_DURATION}. The final edit is capped at ${maxDurationSeconds} seconds; when the total is longer, post-production speeds each complete shot proportionally. Return lengths in image order in "segment_durations" as an array of EXACTLY ${segmentCount} whole numbers.`,
+      `For EACH image write a focused "shot_prompt": a STANDALONE single-shot video-generation instruction describing ONLY that one photo's scene, its chosen camera move, and its motion & lighting — as if it is the only clip that exists. It must instruct the model to preserve the EXACT room, furniture, materials, textures and layout in that reference photo with no cropping, warping, added or removed objects — keep it pixel-faithful; only the camera moves, slowly and stably. No people, no text overlays.`,
+      `Also write ONE short "style_guide" (1–2 sentences) capturing the shared cinematic look — lighting, color, mood, pacing — that applies to every shot. This is a STYLE reference that is reused per shot; it is NOT a single prompt spanning multiple images.`,
+      `Respond ONLY with a single JSON object matching: {"sequence":[{"photo_index":number,"room_type":string,"style":string,"camera_move":string,"target":string,"shot_prompt":string}],"style_guide":string,"segment_durations":number[]}. Both "sequence" and "segment_durations" must have EXACTLY ${segmentCount} entries, one per image in order.`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -199,8 +214,15 @@ export async function analyzeAndOptimizePrompt(params: {
     },
     body: JSON.stringify({
       model: getVisionModel(),
-      max_tokens: 4000,
-      messages: [{ role: "user", content }],
+      max_tokens: 6000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a professional real-estate cinematography planner. Respond with a single valid JSON object only — no prose and no markdown code fences.",
+        },
+        { role: "user", content },
+      ],
     }),
   });
 
@@ -215,21 +237,24 @@ export async function analyzeAndOptimizePrompt(params: {
     choices: Array<{ message: { content: string } }>;
   };
   const raw = data.choices?.[0]?.message?.content ?? "";
-  const jsonText = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
   let parsed: {
     sequence?: AnalysisResult["sequence"];
+    style_guide?: string;
+    /** Older schema name — still accepted as the style guide. */
     optimized_prompt?: string;
     segment_durations?: unknown;
-  };
+  } = {};
   try {
-    parsed = JSON.parse(jsonText);
+    parsed = JSON.parse(extractJsonObject(raw));
   } catch {
-    // Fallback: use raw text as the prompt if JSON parsing fails.
-    parsed = { sequence: [], optimized_prompt: raw.slice(0, 2000) };
+    // A fumbled/incomplete response must never become a broken prompt: fall
+    // through to the deterministic per-shot fallbacks below.
+    parsed = {};
   }
 
-  const optimizedPrompt =
-    parsed.optimized_prompt?.trim() || buildFallbackPrompt(ordered.length);
+  const styleGuide =
+    (parsed.style_guide ?? parsed.optimized_prompt ?? "").toString().trim() ||
+    buildFallbackStyleGuide();
 
   // AI-chosen per-shot lengths. Always produce exactly `segmentCount` values,
   // each clamped to [SEGMENT_MIN,SEGMENT_MAX]; any missing/invalid entry falls
@@ -244,20 +269,87 @@ export async function analyzeAndOptimizePrompt(params: {
   );
   const duration = segmentDurations.reduce((sum, value) => sum + value, 0);
 
+  const sequence = Array.isArray(parsed.sequence) ? parsed.sequence : [];
+  const shotPrompts = buildShotPrompts(
+    sequence,
+    styleGuide,
+    ordered.map(img => img.roomTag),
+    segmentCount
+  );
+
   return {
-    sequence: parsed.sequence ?? [],
-    optimizedPrompt,
+    sequence,
+    styleGuide,
+    shotPrompts,
     segmentDurations,
     duration,
   };
 }
 
-export function buildFallbackPrompt(imageCount: number): string {
+/** Pull the first complete JSON object out of a model response. */
+function extractJsonObject(raw: string): string {
+  const unfenced = raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    return unfenced.slice(start, end + 1);
+  }
+  return unfenced;
+}
+
+/**
+ * Build the final Kling prompt for each image's shot. Each entry combines the
+ * image's own single-shot instruction with the shared style guide, so every
+ * shot keeps its scene-specific direction instead of a generic whole-tour text.
+ */
+function buildShotPrompts(
+  sequence: AnalysisResult["sequence"],
+  styleGuide: string,
+  roomTags: Array<string | null | undefined>,
+  segmentCount: number
+): string[] {
+  return Array.from({ length: segmentCount }, (_, index) => {
+    const entry =
+      sequence.find(item => Number(item?.photo_index) === index + 1) ??
+      sequence[index];
+    const shot =
+      typeof entry?.shot_prompt === "string" ? entry.shot_prompt.trim() : "";
+    const base = shot || buildFallbackShotPrompt(roomTags[index]);
+    return [base, styleGuide].filter(Boolean).join(" ").trim();
+  });
+}
+
+/** Shared cinematic style guide used when the model omits one. */
+export function buildFallbackStyleGuide(): string {
+  return "Soft, natural, filmic lighting with warm neutral color and slow, steady pacing; a calm, premium real-estate look consistent across every shot.";
+}
+
+/** Deterministic single-shot fallback for one image (never spans other images). */
+export function buildFallbackShotPrompt(roomTag?: string | null): string {
+  const subject = roomTag?.trim() ? `the ${roomTag.trim()}` : "this space";
   return [
-    `A professional cinematic real estate video presenting the property in the ${imageCount} reference photos, in their exact given order.`,
-    `The camera intelligently adapts to each scene — sweeping aerial drone reveals and slow orbits for exteriors and outdoor spaces, smooth first-person glides through interior rooms (never passing through unseen doorways), and elegant push-ins on feature details — with soft, natural, filmic lighting.`,
-    `Preserve the exact rooms, furniture, materials, textures and layout visible in the reference photos with no cropping, warping, or added/removed objects — keep the photos pixel-faithful and only move the camera. Smooth, slow, stable motion. No people, no text overlays.`,
+    `A professional cinematic real estate shot of ${subject}, generated from a single still photo.`,
+    `The camera performs ONE slow, stable, subtle move (a gentle push-in) that stays entirely within the frame — it never travels through doorways or into unseen space.`,
+    `Preserve the exact room, furniture, materials, textures and layout with no cropping, warping, or added/removed objects — keep it pixel-faithful; only the camera moves. Soft, natural, filmic lighting. No people, no text overlays.`,
   ].join(" ");
+}
+
+/** Per-image single-shot prompts for when analysis fails entirely. */
+export function buildFallbackShotPrompts(
+  imageCount: number,
+  roomTags: Array<string | null | undefined> = []
+): string[] {
+  return Array.from({ length: Math.max(1, imageCount) }, (_, index) =>
+    buildFallbackShotPrompt(roomTags[index])
+  );
+}
+
+/** Shared style guide fallback (kept for the job's stored record). */
+export function buildFallbackPrompt(_imageCount: number): string {
+  return buildFallbackStyleGuide();
 }
 
 /** Lightweight credential check — lists models, costs nothing. */

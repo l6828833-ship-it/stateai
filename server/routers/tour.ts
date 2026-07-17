@@ -11,8 +11,10 @@ import {
   analyzeAndOptimizePrompt,
   assertInworldConfigured,
   buildFallbackPrompt,
+  buildFallbackShotPrompts,
   defaultDurationFor,
   normalizeSegmentDurations,
+  segmentCountFor,
 } from "../inworld";
 import {
   assertKlingConfigured,
@@ -317,10 +319,13 @@ async function resolvePlanLimits(userId: number) {
   } catch (error) {
     // Uploads can safely retain Starter limits during a transient Stripe outage;
     // costly generation still verifies the exact entitlement fail-closed.
-    console.warn("[Billing] Using safe upload limits while Stripe is unavailable", {
-      userId,
-      error,
-    });
+    console.warn(
+      "[Billing] Using safe upload limits while Stripe is unavailable",
+      {
+        userId,
+        error,
+      }
+    );
     return fallback;
   }
 }
@@ -627,11 +632,10 @@ export const tourRouter = router({
       // Stripe state. The lookup remains owner-scoped, and first redemption is
       // still serialized inside reserveGenerationJob.
       if (input.additionalCheckoutSessionId) {
-        const existing =
-          await db.getGenerationJobByAdditionalCheckoutSession(
-            input.additionalCheckoutSessionId,
-            ctx.user.id
-          );
+        const existing = await db.getGenerationJobByAdditionalCheckoutSession(
+          input.additionalCheckoutSessionId,
+          ctx.user.id
+        );
         if (existing) return toClientJobWithMedia(existing, true);
       }
 
@@ -804,28 +808,34 @@ export const tourRouter = router({
         // HIDDEN STEP — Claude Sonnet analyzes the photos and decides the camera
         // movement, the optimized prompt AND the ideal clip length. Failure
         // falls back to a solid template rather than blocking paid generation.
-        let optimizedPrompt: string;
+        // styleGuide is stored for the record; shotPrompts drive each shot.
+        let styleGuide: string;
+        let shotPrompts: string[];
         let segmentDurations: number[];
         try {
           const analysis = await analyzeAndOptimizePrompt({
             images: orderedPublic,
             maxDurationSeconds: billingEntitlement.maxDurationSeconds,
           });
-          optimizedPrompt = analysis.optimizedPrompt;
+          styleGuide = analysis.styleGuide;
+          shotPrompts = analysis.shotPrompts;
           segmentDurations = analysis.segmentDurations;
         } catch (e) {
           console.warn(
             "[Generation] Prompt optimization failed, using fallback:",
             e
           );
-          optimizedPrompt = buildFallbackPrompt(sorted.length);
+          styleGuide = buildFallbackPrompt(sorted.length);
+          shotPrompts = buildFallbackShotPrompts(
+            sorted.length,
+            orderedPublic.map(image => image.roomTag)
+          );
           segmentDurations = []; // per-segment default applied below
         }
 
-        // Split the tour into first/last-frame segments so EVERY uploaded
-        // image is a real frame in the final video (Kling accepts only a first
-        // and optional last frame per task). Segments are polled and stitched
-        // back together later. One image → one single-frame segment.
+        // One independent single-frame shot per image. Each shot animates the
+        // camera within its own photo; the shots are polled, then stitched with
+        // hard cuts between them (no morphing between different rooms).
         const segments = planKlingSegments(orderedPublic);
         // Provider segments remain within Kling's valid 3–6 second range.
         // Post-production applies the plan's final-output cap when necessary.
@@ -834,10 +844,7 @@ export const tourRouter = router({
           segments.length,
           billingEntitlement.maxDurationSeconds
         );
-        const sourceDuration = durations.reduce(
-          (sum, value) => sum + value,
-          0
-        );
+        const sourceDuration = durations.reduce((sum, value) => sum + value, 0);
         const finalDuration = Math.min(
           sourceDuration,
           billingEntitlement.maxDurationSeconds
@@ -847,7 +854,7 @@ export const tourRouter = router({
         // submission response is lost; segments are reconciled by their
         // deterministic external ids on poll.
         await db.updateGenerationJob(job.id, {
-          optimizedPrompt,
+          optimizedPrompt: styleGuide,
           clipDuration: finalDuration,
         });
 
@@ -860,7 +867,9 @@ export const tourRouter = router({
         for (const segment of segments) {
           try {
             await submitKlingVideo({
-              prompt: optimizedPrompt,
+              // Each image gets its OWN scene-specific prompt (falling back to
+              // the shared style guide only if a shot prompt is missing).
+              prompt: shotPrompts[segment.index] ?? styleGuide,
               images: segment.images,
               duration: durations[segment.index],
               aspectRatio,
@@ -957,7 +966,9 @@ export const tourRouter = router({
         // archive a truncated video). Keep processing and retry next poll.
         return toClientJobWithMedia(job, includeVideo);
       }
-      const segmentCount = Math.max(1, imageCount - 1);
+      // One shot per image (hard-cut tour), so the shot count equals the image
+      // count. Must match planKlingSegments used at submission time.
+      const segmentCount = segmentCountFor(imageCount);
       const externalIds = Array.from({ length: segmentCount }, (_, i) =>
         klingSegmentExternalTaskId(job.id, i)
       );

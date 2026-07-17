@@ -59,7 +59,7 @@ export const VIDEO_ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 export type VideoAspectRatio = (typeof VIDEO_ASPECT_RATIOS)[number];
 
 export function isVideoAspectRatio(value: string): value is VideoAspectRatio {
-  return VIDEO_ASPECT_RATIOS.some((ratio) => ratio === value);
+  return VIDEO_ASPECT_RATIOS.some(ratio => ratio === value);
 }
 
 /** Every video is rendered at full HD; resolution is not user-configurable. */
@@ -130,7 +130,7 @@ export function klingExternalTaskIdForJob(jobId: number): string {
  */
 export function klingSegmentExternalTaskId(
   jobId: number,
-  segmentIndex: number,
+  segmentIndex: number
 ): string {
   if (!Number.isSafeInteger(jobId) || jobId <= 0) {
     throw new Error("A positive generation job id is required");
@@ -143,57 +143,33 @@ export function klingSegmentExternalTaskId(
 
 export interface KlingSegmentPlan {
   index: number;
-  /** The 1-2 frames for this segment (first, optional last), re-based to 0/1. */
+  /** The single frame for this shot (first_frame only), re-based to index 0. */
   images: OrderedImage[];
 }
 
 /**
- * Plan the ordered first/last-frame segments that cover EVERY image.
- * - 1 image  → 1 single-frame segment.
- * - N images → N-1 segments, each spanning consecutive images
- *   (segment i: first_frame = image i, last_frame = image i+1).
- * Concatenating the segment videos in order yields a tour that visits every
- * uploaded image, since each image is the last frame of one segment and the
- * first frame of the next.
+ * Plan one INDEPENDENT single-frame shot per image.
+ * - N images → N segments; segment i is generated from image i ALONE
+ *   (first_frame only, no last_frame — so Kling animates the camera within
+ *   that single photo instead of morphing between two different rooms).
+ * Concatenating the segment videos in order — with a hard cut between each —
+ * yields a professional tour that shows every uploaded image as its own shot.
  */
 export function planKlingSegments(images: OrderedImage[]): KlingSegmentPlan[] {
   const ordered = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   if (ordered.length === 0) {
     throw new Error("No images to plan Kling segments");
   }
-  if (ordered.length === 1) {
-    return [
+  return ordered.map((image, index) => ({
+    index,
+    images: [
       {
-        index: 0,
-        images: [
-          {
-            sequenceIndex: 0,
-            publicUrl: ordered[0].publicUrl,
-            roomTag: ordered[0].roomTag,
-          },
-        ],
+        sequenceIndex: 0,
+        publicUrl: image.publicUrl,
+        roomTag: image.roomTag,
       },
-    ];
-  }
-  const segments: KlingSegmentPlan[] = [];
-  for (let i = 0; i < ordered.length - 1; i++) {
-    segments.push({
-      index: i,
-      images: [
-        {
-          sequenceIndex: 0,
-          publicUrl: ordered[i].publicUrl,
-          roomTag: ordered[i].roomTag,
-        },
-        {
-          sequenceIndex: 1,
-          publicUrl: ordered[i + 1].publicUrl,
-          roomTag: ordered[i + 1].roomTag,
-        },
-      ],
-    });
-  }
-  return segments;
+    ],
+  }));
 }
 
 /**
@@ -204,7 +180,8 @@ export function encodeKlingProviderTaskId(taskId: string): string {
   const value = taskId.trim();
   if (!value) throw new Error("Kling returned an empty task id");
   const encoded = `${PROVIDER_TASK_PREFIX}${value}`;
-  if (encoded.length > 128) throw new Error("Kling task id is too long to store");
+  if (encoded.length > 128)
+    throw new Error("Kling task id is too long to store");
   return encoded;
 }
 
@@ -222,11 +199,15 @@ function validateOrderedImages(images: OrderedImage[]): OrderedImage[] {
   const ordered = [...images].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   for (let index = 0; index < ordered.length; index++) {
     if (ordered[index].sequenceIndex !== index) {
-      throw new Error("Reference image sequence must be gapless and start at zero");
+      throw new Error(
+        "Reference image sequence must be gapless and start at zero"
+      );
     }
     const url = new URL(ordered[index].publicUrl);
     if (url.protocol !== "https:") {
-      throw new Error("Reference images must use directly downloadable HTTPS URLs");
+      throw new Error(
+        "Reference images must use directly downloadable HTTPS URLs"
+      );
     }
   }
   return ordered;
@@ -246,7 +227,9 @@ export function buildKlingImageToVideoRequest(params: {
     throw new Error("Empty prompt — refusing to submit paid generation");
   }
   if (!Number.isInteger(duration) || duration < 3 || duration > 15) {
-    throw new Error("Kling duration must be a whole number from 3 to 15 seconds");
+    throw new Error(
+      "Kling duration must be a whole number from 3 to 15 seconds"
+    );
   }
   if (!VIDEO_ASPECT_RATIOS.includes(aspectRatio)) {
     throw new Error("Kling aspect ratio must be 16:9, 9:16, or 1:1");
@@ -286,7 +269,10 @@ export function buildKlingImageToVideoRequest(params: {
   };
 }
 
-async function parseEnvelope<T>(response: Response, action: string): Promise<T> {
+async function parseEnvelope<T>(
+  response: Response,
+  action: string
+): Promise<T> {
   const raw = await response.text();
   let envelope: KlingEnvelope<T> | null = null;
   try {
@@ -297,13 +283,15 @@ async function parseEnvelope<T>(response: Response, action: string): Promise<T> 
 
   if (!response.ok) {
     throw new Error(
-      `${action} failed (${response.status}): ${(envelope?.message || raw || response.statusText).slice(0, 500)}`,
+      `${action} failed (${response.status}): ${(envelope?.message || raw || response.statusText).slice(0, 500)}`
     );
   }
   if (!envelope || envelope.code !== 0) {
-    const requestId = envelope?.request_id ? ` [request ${envelope.request_id}]` : "";
+    const requestId = envelope?.request_id
+      ? ` [request ${envelope.request_id}]`
+      : "";
     throw new Error(
-      `${action} was rejected by Kling (${envelope?.code ?? "invalid response"})${requestId}: ${(envelope?.message || raw || "Unknown error").slice(0, 500)}`,
+      `${action} was rejected by Kling (${envelope?.code ?? "invalid response"})${requestId}: ${(envelope?.message || raw || "Unknown error").slice(0, 500)}`
     );
   }
   return envelope.data;
@@ -318,7 +306,8 @@ async function queryKlingTasks(query: {
   }
   const params = new URLSearchParams();
   if (query.taskIds) params.set("task_ids", query.taskIds);
-  if (query.externalTaskIds) params.set("external_task_ids", query.externalTaskIds);
+  if (query.externalTaskIds)
+    params.set("external_task_ids", query.externalTaskIds);
 
   const response = await fetch(`${getApiBase()}${TASKS_PATH}?${params}`, {
     headers: authHeaders(),
@@ -328,19 +317,21 @@ async function queryKlingTasks(query: {
 }
 
 export async function findKlingTaskByExternalId(
-  externalTaskId: string,
+  externalTaskId: string
 ): Promise<KlingSubmitResult | null> {
   const tasks = await queryKlingTasks({ externalTaskIds: externalTaskId });
-  const task = tasks.find((candidate) => candidate.external_id === externalTaskId);
+  const task = tasks.find(
+    candidate => candidate.external_id === externalTaskId
+  );
   if (!task?.id) return null;
   return { taskId: task.id, externalTaskId };
 }
 
 async function recoverSubmittedTask(
-  externalTaskId: string,
+  externalTaskId: string
 ): Promise<KlingSubmitResult | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 750));
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750));
     try {
       const recovered = await findKlingTaskByExternalId(externalTaskId);
       if (recovered) return recovered;
@@ -362,7 +353,7 @@ export class KlingAmbiguousSubmissionError extends Error {
   readonly externalTaskId: string;
   constructor(externalTaskId: string, cause: unknown) {
     super(
-      "Kling submission outcome is unknown; the task may still be processing and will be reconciled by its external id",
+      "Kling submission outcome is unknown; the task may still be processing and will be reconciled by its external id"
     );
     this.name = "KlingAmbiguousSubmissionError";
     this.externalTaskId = externalTaskId;
@@ -395,14 +386,22 @@ export async function submitKlingVideo(params: {
     // AMBIGUOUS error so the caller keeps polling instead of failing the job.
     const recovered = await recoverSubmittedTask(params.externalTaskId);
     if (recovered) return recovered;
-    throw new KlingAmbiguousSubmissionError(params.externalTaskId, networkError);
+    throw new KlingAmbiguousSubmissionError(
+      params.externalTaskId,
+      networkError
+    );
   }
 
   // The server responded. A rejection here is DEFINITIVE — no task was created.
-  const task = await parseEnvelope<KlingTask>(response, "Kling video submission");
+  const task = await parseEnvelope<KlingTask>(
+    response,
+    "Kling video submission"
+  );
   if (!task.id) throw new Error("Kling video submission returned no task id");
   if (task.status === "failed") {
-    throw new Error(`Kling rejected the video task: ${task.message || "Unknown error"}`);
+    throw new Error(
+      `Kling rejected the video task: ${task.message || "Unknown error"}`
+    );
   }
   return { taskId: task.id, externalTaskId: params.externalTaskId };
 }
@@ -423,7 +422,9 @@ function normalizeKlingTask(task: KlingTask): KlingPollResult {
     };
   }
 
-  const video = task.outputs?.find((output) => output.type === "video" && output.url);
+  const video = task.outputs?.find(
+    output => output.type === "video" && output.url
+  );
   if (!video?.url) {
     return {
       status: "failed",
@@ -437,7 +438,7 @@ function normalizeKlingTask(task: KlingTask): KlingPollResult {
 /** Query one official Kling task and normalize its status for the application. */
 export async function pollKlingJob(taskId: string): Promise<KlingPollResult> {
   const tasks = await queryKlingTasks({ taskIds: taskId });
-  const task = tasks.find((candidate) => candidate.id === taskId);
+  const task = tasks.find(candidate => candidate.id === taskId);
   if (!task) throw new Error("Kling task query returned no matching task");
   return normalizeKlingTask(task);
 }
@@ -454,28 +455,31 @@ export interface KlingSegmentStatus extends KlingPollResult {
  * `pending`, so the caller keeps waiting instead of failing the whole job.
  */
 export async function pollKlingSegments(
-  externalTaskIds: string[],
+  externalTaskIds: string[]
 ): Promise<KlingSegmentStatus[]> {
   if (externalTaskIds.length === 0) {
     throw new Error("No segment external task ids to poll");
   }
   // Keep commas literal (batch separator); each id is already URL-safe.
-  const query = externalTaskIds.map((id) => encodeURIComponent(id)).join(",");
+  const query = externalTaskIds.map(id => encodeURIComponent(id)).join(",");
   const response = await fetch(
     `${getApiBase()}${TASKS_PATH}?external_task_ids=${query}`,
     {
       headers: authHeaders(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    },
+    }
   );
-  const tasks = await parseEnvelope<KlingTask[]>(response, "Kling segment status query");
+  const tasks = await parseEnvelope<KlingTask[]>(
+    response,
+    "Kling segment status query"
+  );
 
   const byExternalId = new Map<string, KlingTask>();
   for (const task of tasks) {
     if (task.external_id) byExternalId.set(task.external_id, task);
   }
 
-  return externalTaskIds.map((externalTaskId) => {
+  return externalTaskIds.map(externalTaskId => {
     const task = byExternalId.get(externalTaskId);
     if (!task) {
       return {
@@ -503,7 +507,9 @@ export async function downloadKlingVideo(videoUrl: string): Promise<Buffer> {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText);
-    throw new Error(`Kling video download failed (${response.status}): ${text.slice(0, 500)}`);
+    throw new Error(
+      `Kling video download failed (${response.status}): ${text.slice(0, 500)}`
+    );
   }
   return Buffer.from(await response.arrayBuffer());
 }
@@ -514,7 +520,10 @@ export async function verifyKlingKey(): Promise<boolean> {
     const response = await fetch(`${getApiBase()}${TASKS_PATH}`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ limit: 1, filters: [{ key: "product_type", values: ["video"] }] }),
+      body: JSON.stringify({
+        limit: 1,
+        filters: [{ key: "product_type", values: ["video"] }],
+      }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     await parseEnvelope<unknown>(response, "Kling credential verification");
