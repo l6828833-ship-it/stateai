@@ -9,14 +9,8 @@ import {
   InputOTPGroup,
   InputOTPSlot,
 } from "@/components/ui/input-otp";
-import {
-  ArrowLeft,
-  Clapperboard,
-  Eye,
-  EyeOff,
-  Loader2,
-  Mail,
-} from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Mail } from "lucide-react";
+import Logo from "@/components/Logo";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -219,9 +213,7 @@ export default function Auth({
           onClick={() => navigate("/")}
           className="mx-auto mb-6 flex items-center gap-2 font-display text-lg text-foreground"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-lg shadow-zinc-950/15">
-            <Clapperboard className="h-4 w-4" />
-          </span>
+          <Logo className="h-9 w-9" />
           EstateTour AI
         </button>
 

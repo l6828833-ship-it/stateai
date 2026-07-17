@@ -14,6 +14,7 @@ import GenerationTheater, {
 import PricingModal from "@/components/PricingModal";
 import BillingManagementModal from "@/components/BillingManagementModal";
 import PayAsYouGoCard from "@/components/PayAsYouGoCard";
+import Logo from "@/components/Logo";
 import DashboardSidebar from "@/components/DashboardSidebar";
 import DashboardBottomNav from "@/components/DashboardBottomNav";
 import { Button } from "@/components/ui/button";
@@ -970,9 +971,7 @@ export default function Dashboard() {
             href="/"
             className="flex items-center gap-2 font-display text-base text-foreground"
           >
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Clapperboard className="h-3.5 w-3.5" />
-            </span>
+            <Logo className="h-7 w-7 rounded-lg" />
             EstateTour
           </a>
           {subscribed ? (
