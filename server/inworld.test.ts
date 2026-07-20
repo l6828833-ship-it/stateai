@@ -27,10 +27,10 @@ describe("per-shot (segment) duration", () => {
     expect(clampSegmentDuration(0)).toBe(DEFAULT_SEGMENT_DURATION);
   });
 
-  it("maps image count to the number of shots the AI must time", () => {
-    expect(segmentCountFor(1)).toBe(1); // single-image tour = 1 shot
-    expect(segmentCountFor(2)).toBe(1);
-    expect(segmentCountFor(5)).toBe(4); // N images -> N-1 transitions
-    expect(segmentCountFor(10)).toBe(9);
+  it("maps image count to one shot per image (hard-cut tour)", () => {
+    expect(segmentCountFor(1)).toBe(1); // single image = 1 shot
+    expect(segmentCountFor(2)).toBe(2);
+    expect(segmentCountFor(5)).toBe(5); // N images -> N independent shots
+    expect(segmentCountFor(10)).toBe(10);
   });
 });
