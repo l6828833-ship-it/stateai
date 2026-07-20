@@ -16,6 +16,7 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Newspaper,
   Search,
   Shield,
   ShieldCheck,
@@ -27,13 +28,14 @@ import {
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import BlogAdmin from "@/components/admin/BlogAdmin";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 
-type AdminTab = "users" | "audit";
+type AdminTab = "users" | "audit" | "blog";
 
 function StatusPill({
   active,
@@ -272,6 +274,20 @@ export default function Admin() {
           >
             <FileClock className="h-4 w-4" /> Audit history
           </button>
+          <button
+            onClick={() => {
+              setTab("blog");
+              setSidebarOpen(false);
+            }}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium",
+              tab === "blog"
+                ? "bg-white text-zinc-950"
+                : "text-white/60 hover:bg-white/10 hover:text-white"
+            )}
+          >
+            <Newspaper className="h-4 w-4" /> Blog
+          </button>
           <div className="my-3 h-px bg-white/10" />
           <button
             onClick={() => navigate("/dashboard")}
@@ -318,7 +334,9 @@ export default function Admin() {
               <h1 className="font-display text-lg">
                 {tab === "users"
                   ? "User management"
-                  : "Immutable audit history"}
+                  : tab === "blog"
+                    ? "Blog management"
+                    : "Immutable audit history"}
               </h1>
               <p className="hidden text-xs text-zinc-400 sm:block">
                 Secure operational controls for your SaaS
@@ -331,7 +349,9 @@ export default function Admin() {
         </header>
 
         <main className="p-4 sm:p-7 lg:p-9">
-          {tab === "users" ? (
+          {tab === "blog" ? (
+            <BlogAdmin />
+          ) : tab === "users" ? (
             <>
               <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[

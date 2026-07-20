@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAuthRoutes } from "./googleAuth";
 import { registerStorageProxy } from "./storageProxy";
+import { registerBlogRoutes } from "../blog/routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -179,6 +180,11 @@ async function startServer() {
       },
     })
   );
+  // Public server-rendered blog (SEO/AdSense-crawlable HTML + sitemap/robots/
+  // rss/ads.txt). Registered BEFORE the SPA fallback so blog URLs return real
+  // HTML; every non-blog path falls through via next() to the SPA below.
+  registerBlogRoutes(app);
+
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
