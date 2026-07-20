@@ -22,6 +22,7 @@ import {
   InsertAuthCode,
   InsertBlogCategory,
   InsertBlogPost,
+  InsertBlogSettings,
   InsertGenerationJob,
   InsertProjectImage,
   InsertUser,
