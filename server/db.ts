@@ -1,5 +1,6 @@
 import {
   and,
+  asc,
   count,
   desc,
   eq,
@@ -7,6 +8,7 @@ import {
   gte,
   ilike,
   isNull,
+  ne,
   or,
   sql,
   type SQL,
@@ -14,12 +16,20 @@ import {
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
+  BlogCategory,
+  BlogPost,
+  BlogSettings,
   InsertAuthCode,
+  InsertBlogCategory,
+  InsertBlogPost,
   InsertGenerationJob,
   InsertProjectImage,
   InsertUser,
   adminAuditLogs,
   authCodes,
+  blogCategories,
+  blogPosts,
+  blogSettings,
   generationJobs,
   projectImages,
   projects,
@@ -64,6 +74,9 @@ export async function checkDatabaseHealth(): Promise<void> {
     db.select().from(generationJobs).limit(0),
     db.select().from(subscriptions).limit(0),
     db.select().from(adminAuditLogs).limit(0),
+    db.select().from(blogCategories).limit(0),
+    db.select().from(blogPosts).limit(0),
+    db.select().from(blogSettings).limit(0),
   ]);
 }
 
@@ -1832,4 +1845,325 @@ export async function incrementUserSessionVersion(userId: number) {
     .update(users)
     .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
     .where(eq(users.id, userId));
+}
+
+
+// ===========================================================================
+// Blog data access
+// ===========================================================================
+
+async function requireDb() {
+  const db = await getDb();
+  if (!db) throw new Error("DATABASE_URL is not configured");
+  return db;
+}
+
+/** Fetch the singleton blog settings row, creating it on first access. */
+export async function getBlogSettings(): Promise<BlogSettings> {
+  const db = await requireDb();
+  const [existing] = await db
+    .select()
+    .from(blogSettings)
+    .where(eq(blogSettings.id, 1))
+    .limit(1);
+  if (existing) return existing;
+  const [created] = await db
+    .insert(blogSettings)
+    .values({ id: 1 })
+    .onConflictDoNothing({ target: blogSettings.id })
+    .returning();
+  if (created) return created;
+  const [row] = await db
+    .select()
+    .from(blogSettings)
+    .where(eq(blogSettings.id, 1))
+    .limit(1);
+  return row;
+}
+
+export async function updateBlogSettings(
+  patch: Partial<InsertBlogSettings>
+): Promise<BlogSettings> {
+  const db = await requireDb();
+  await getBlogSettings(); // ensure the row exists
+  const [updated] = await db
+    .update(blogSettings)
+    .set({ ...patch, id: 1 })
+    .where(eq(blogSettings.id, 1))
+    .returning();
+  return updated;
+}
+
+export async function listBlogCategories(): Promise<BlogCategory[]> {
+  const db = await requireDb();
+  return db
+    .select()
+    .from(blogCategories)
+    .orderBy(asc(blogCategories.sortOrder), asc(blogCategories.name));
+}
+
+export async function getBlogCategoryBySlug(
+  slug: string
+): Promise<BlogCategory | null> {
+  const db = await requireDb();
+  const [row] = await db
+    .select()
+    .from(blogCategories)
+    .where(eq(blogCategories.slug, slug))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getBlogCategoryById(
+  id: number
+): Promise<BlogCategory | null> {
+  const db = await requireDb();
+  const [row] = await db
+    .select()
+    .from(blogCategories)
+    .where(eq(blogCategories.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function createBlogCategory(
+  values: InsertBlogCategory
+): Promise<BlogCategory> {
+  const db = await requireDb();
+  const [row] = await db.insert(blogCategories).values(values).returning();
+  return row;
+}
+
+export async function updateBlogCategory(
+  id: number,
+  patch: Partial<InsertBlogCategory>
+): Promise<BlogCategory> {
+  const db = await requireDb();
+  const [row] = await db
+    .update(blogCategories)
+    .set(patch)
+    .where(eq(blogCategories.id, id))
+    .returning();
+  return row;
+}
+
+export async function deleteBlogCategory(id: number): Promise<void> {
+  const db = await requireDb();
+  await db.delete(blogCategories).where(eq(blogCategories.id, id));
+}
+
+export async function countBlogPostsInCategory(
+  categoryId: number
+): Promise<number> {
+  const db = await requireDb();
+  const [row] = await db
+    .select({ value: count() })
+    .from(blogPosts)
+    .where(eq(blogPosts.categoryId, categoryId));
+  return row?.value ?? 0;
+}
+
+/** A post joined with its category slug/name (for URLs + display). */
+export interface BlogPostWithCategory extends BlogPost {
+  categorySlug: string;
+  categoryName: string;
+}
+
+function postWithCategorySelection() {
+  return {
+    id: blogPosts.id,
+    categoryId: blogPosts.categoryId,
+    slug: blogPosts.slug,
+    title: blogPosts.title,
+    excerpt: blogPosts.excerpt,
+    content: blogPosts.content,
+    coverImageUrl: blogPosts.coverImageUrl,
+    coverImageAlt: blogPosts.coverImageAlt,
+    authorName: blogPosts.authorName,
+    status: blogPosts.status,
+    seoTitle: blogPosts.seoTitle,
+    seoDescription: blogPosts.seoDescription,
+    canonicalUrl: blogPosts.canonicalUrl,
+    ogImageUrl: blogPosts.ogImageUrl,
+    metaKeywords: blogPosts.metaKeywords,
+    tags: blogPosts.tags,
+    views: blogPosts.views,
+    publishedAt: blogPosts.publishedAt,
+    createdAt: blogPosts.createdAt,
+    updatedAt: blogPosts.updatedAt,
+    categorySlug: blogCategories.slug,
+    categoryName: blogCategories.name,
+  };
+}
+
+export interface ListBlogPostsOptions {
+  page?: number;
+  pageSize?: number;
+  categoryId?: number;
+  publishedOnly?: boolean;
+  search?: string;
+}
+
+export interface PaginatedBlogPosts {
+  items: BlogPostWithCategory[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export async function listBlogPosts(
+  options: ListBlogPostsOptions = {}
+): Promise<PaginatedBlogPosts> {
+  const db = await requireDb();
+  const page = Math.max(1, options.page ?? 1);
+  const pageSize = Math.min(50, Math.max(1, options.pageSize ?? 10));
+
+  const conditions: SQL[] = [];
+  if (options.publishedOnly) {
+    conditions.push(eq(blogPosts.status, "published"));
+  }
+  if (typeof options.categoryId === "number") {
+    conditions.push(eq(blogPosts.categoryId, options.categoryId));
+  }
+  if (options.search?.trim()) {
+    const term = `%${options.search.trim()}%`;
+    const match = or(
+      ilike(blogPosts.title, term),
+      ilike(blogPosts.excerpt, term)
+    );
+    if (match) conditions.push(match);
+  }
+  const where = conditions.length ? and(...conditions) : undefined;
+
+  const [countRow] = await db
+    .select({ value: count() })
+    .from(blogPosts)
+    .where(where);
+  const total = countRow?.value ?? 0;
+
+  // Published posts sort by publish date; admin listings by recent edits.
+  const order = options.publishedOnly
+    ? [desc(blogPosts.publishedAt), desc(blogPosts.id)]
+    : [desc(blogPosts.updatedAt), desc(blogPosts.id)];
+
+  const items = (await db
+    .select(postWithCategorySelection())
+    .from(blogPosts)
+    .innerJoin(blogCategories, eq(blogPosts.categoryId, blogCategories.id))
+    .where(where)
+    .orderBy(...order)
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)) as BlogPostWithCategory[];
+
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+export async function getBlogPostBySlug(
+  slug: string,
+  opts: { publishedOnly?: boolean } = {}
+): Promise<BlogPostWithCategory | null> {
+  const db = await requireDb();
+  const conditions: SQL[] = [eq(blogPosts.slug, slug)];
+  if (opts.publishedOnly) conditions.push(eq(blogPosts.status, "published"));
+  const [row] = (await db
+    .select(postWithCategorySelection())
+    .from(blogPosts)
+    .innerJoin(blogCategories, eq(blogPosts.categoryId, blogCategories.id))
+    .where(and(...conditions))
+    .limit(1)) as BlogPostWithCategory[];
+  return row ?? null;
+}
+
+export async function getBlogPostById(
+  id: number
+): Promise<BlogPostWithCategory | null> {
+  const db = await requireDb();
+  const [row] = (await db
+    .select(postWithCategorySelection())
+    .from(blogPosts)
+    .innerJoin(blogCategories, eq(blogPosts.categoryId, blogCategories.id))
+    .where(eq(blogPosts.id, id))
+    .limit(1)) as BlogPostWithCategory[];
+  return row ?? null;
+}
+
+export async function blogSlugExists(
+  slug: string,
+  excludeId?: number
+): Promise<boolean> {
+  const db = await requireDb();
+  const conditions: SQL[] = [eq(blogPosts.slug, slug)];
+  if (typeof excludeId === "number") conditions.push(ne(blogPosts.id, excludeId));
+  const [row] = await db
+    .select({ id: blogPosts.id })
+    .from(blogPosts)
+    .where(and(...conditions))
+    .limit(1);
+  return Boolean(row);
+}
+
+export async function createBlogPost(
+  values: InsertBlogPost
+): Promise<BlogPost> {
+  const db = await requireDb();
+  const [row] = await db.insert(blogPosts).values(values).returning();
+  return row;
+}
+
+export async function updateBlogPost(
+  id: number,
+  patch: Partial<InsertBlogPost>
+): Promise<BlogPost> {
+  const db = await requireDb();
+  const [row] = await db
+    .update(blogPosts)
+    .set(patch)
+    .where(eq(blogPosts.id, id))
+    .returning();
+  return row;
+}
+
+export async function deleteBlogPost(id: number): Promise<void> {
+  const db = await requireDb();
+  await db.delete(blogPosts).where(eq(blogPosts.id, id));
+}
+
+export async function incrementBlogPostViews(id: number): Promise<void> {
+  const db = await requireDb();
+  await db
+    .update(blogPosts)
+    .set({ views: sql`${blogPosts.views} + 1` })
+    .where(eq(blogPosts.id, id));
+}
+
+/** Lightweight rows for building sitemap.xml / RSS without loading content. */
+export interface BlogSitemapEntry {
+  slug: string;
+  categorySlug: string;
+  updatedAt: Date;
+  publishedAt: Date | null;
+}
+
+export async function listPublishedPostsForSitemap(): Promise<
+  BlogSitemapEntry[]
+> {
+  const db = await requireDb();
+  return (await db
+    .select({
+      slug: blogPosts.slug,
+      categorySlug: blogCategories.slug,
+      updatedAt: blogPosts.updatedAt,
+      publishedAt: blogPosts.publishedAt,
+    })
+    .from(blogPosts)
+    .innerJoin(blogCategories, eq(blogPosts.categoryId, blogCategories.id))
+    .where(eq(blogPosts.status, "published"))
+    .orderBy(desc(blogPosts.publishedAt))) as BlogSitemapEntry[];
 }

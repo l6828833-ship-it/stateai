@@ -29,6 +29,10 @@ export const authPurposeEnum = pgEnum("auth_purpose", [
   "login",
   "reset",
 ]);
+export const blogPostStatusEnum = pgEnum("blog_post_status", [
+  "draft",
+  "published",
+]);
 export const planEnum = pgEnum("plan", [
   // Current customer-facing plans (three tiers × monthly/yearly).
   "starter_monthly",
@@ -254,3 +258,105 @@ export const adminAuditLogs = pgTable("admin_audit_logs", {
 
 export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
 export type InsertAdminAuditLog = typeof adminAuditLogs.$inferInsert;
+
+
+/**
+ * Blog categories. The category `slug` is the first path segment of a public
+ * article URL: `/{category.slug}/{post.slug}`. Slugs are globally unique and
+ * validated against a reserved list so a category can never shadow an app
+ * route (e.g. "dashboard", "admin", "login").
+ */
+export const blogCategories = pgTable("blog_categories", {
+  id: serial("id").primaryKey(),
+  slug: varchar("slug", { length: 160 }).notNull().unique(),
+  name: varchar("name", { length: 160 }).notNull(),
+  description: text("description"),
+  /** Optional SEO overrides for the category listing page. */
+  seoTitle: varchar("seoTitle", { length: 200 }),
+  seoDescription: varchar("seoDescription", { length: 320 }),
+  /** Lower numbers appear first in navigation. */
+  sortOrder: integer("sortOrder").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type BlogCategory = typeof blogCategories.$inferSelect;
+export type InsertBlogCategory = typeof blogCategories.$inferInsert;
+
+/**
+ * Blog posts. Content is admin-authored HTML (rendered server-side for full
+ * SEO / AdSense crawlability). The `slug` is globally unique so every article
+ * has exactly one canonical URL even if its category changes.
+ */
+export const blogPosts = pgTable("blog_posts", {
+  id: serial("id").primaryKey(),
+  categoryId: integer("categoryId").notNull(),
+  slug: varchar("slug", { length: 200 }).notNull().unique(),
+  title: varchar("title", { length: 300 }).notNull(),
+  /** Short summary used in listings, meta description fallback, and RSS. */
+  excerpt: text("excerpt"),
+  /** Full article body as sanitized HTML. */
+  content: text("content").notNull(),
+  coverImageUrl: varchar("coverImageUrl", { length: 768 }),
+  coverImageAlt: varchar("coverImageAlt", { length: 300 }),
+  authorName: varchar("authorName", { length: 160 }),
+  status: blogPostStatusEnum("status").default("draft").notNull(),
+  /** SEO overrides — fall back to title/excerpt/cover when empty. */
+  seoTitle: varchar("seoTitle", { length: 200 }),
+  seoDescription: varchar("seoDescription", { length: 320 }),
+  canonicalUrl: varchar("canonicalUrl", { length: 768 }),
+  ogImageUrl: varchar("ogImageUrl", { length: 768 }),
+  metaKeywords: varchar("metaKeywords", { length: 500 }),
+  /** Comma-separated tags for display + article:tag meta. */
+  tags: text("tags"),
+  views: integer("views").default(0).notNull(),
+  /** Set when first published; drives ordering and sitemap lastmod. */
+  publishedAt: timestamp("publishedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type BlogPost = typeof blogPosts.$inferSelect;
+export type InsertBlogPost = typeof blogPosts.$inferInsert;
+
+/**
+ * Singleton blog configuration (always id = 1). Holds the AdSense code blocks,
+ * custom CSS, and site-level SEO defaults an admin manages from the dashboard.
+ * The AdSense/custom fields are injected raw into server-rendered blog pages,
+ * so only admins can edit them.
+ */
+export const blogSettings = pgTable("blog_settings", {
+  id: integer("id").primaryKey().default(1),
+  siteName: varchar("siteName", { length: 200 }).default("EstateTour Blog").notNull(),
+  siteDescription: text("siteDescription"),
+  /** Absolute site origin (e.g. https://example.com) used for canonical/OG. */
+  siteUrl: varchar("siteUrl", { length: 512 }),
+  blogTitle: varchar("blogTitle", { length: 200 }),
+  /** AdSense publisher id "ca-pub-XXXX" — powers /ads.txt when set. */
+  adsenseClientId: varchar("adsenseClientId", { length: 64 }),
+  /** Raw HTML injected into <head> (AdSense loader / auto-ads / verification). */
+  adsenseHeaderCode: text("adsenseHeaderCode"),
+  /** Raw HTML injected before </body>. */
+  adsenseFooterCode: text("adsenseFooterCode"),
+  /** Extra raw HTML for <head> (e.g. GA, search-console verification). */
+  customHeadHtml: text("customHeadHtml"),
+  /** Custom CSS injected into a <style> tag on every blog page. */
+  customCss: text("customCss"),
+  defaultAuthorName: varchar("defaultAuthorName", { length: 160 }),
+  /** Postgres-side raw HTML placed inside <article>, after the content. */
+  postFooterHtml: text("postFooterHtml"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type BlogSettings = typeof blogSettings.$inferSelect;
+export type InsertBlogSettings = typeof blogSettings.$inferInsert;

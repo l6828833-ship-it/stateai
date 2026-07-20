@@ -2,6 +2,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
 import { authRouter } from "./routers/auth";
+import { blogRouter } from "./routers/blog";
 import { tourRouter } from "./routers/tour";
 
 export const appRouter = router({
@@ -9,6 +10,7 @@ export const appRouter = router({
   system: systemRouter,
   admin: adminRouter,
   auth: authRouter,
+  blog: blogRouter,
   tour: tourRouter,
 });
 

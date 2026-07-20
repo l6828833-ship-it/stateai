@@ -29,6 +29,13 @@
       "when": 1784210000000,
       "tag": "0003_billing_source",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784220000000,
+      "tag": "0004_blog",
+      "breakpoints": true
     }
   ]
 }

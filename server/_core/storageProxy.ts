@@ -50,6 +50,13 @@ export function registerStorageProxy(app: Express) {
             return;
           }
         }
+      } else if (key.startsWith("blog/")) {
+        // Blog media is intentionally public so search engines, social-card
+        // scrapers, and the AdSense crawler can fetch cover / OG images.
+        const signedUrl = await storageGetSignedUrl(key);
+        res.set("Cache-Control", "public, max-age=3600");
+        res.redirect(307, signedUrl);
+        return;
       } else if (!PUBLIC_MARKETING_OBJECTS.has(key)) {
         // Every non-user namespace is private unless explicitly allowlisted.
         res.status(404).send("Media not found");
