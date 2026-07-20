@@ -18,7 +18,7 @@ const orderedImages = [
 ];
 
 describe("official Kling 3.0 request contract", () => {
-  it("uses the documented image-to-video shape and paid-output settings", () => {
+  it("uses the documented shape and never sends a last_frame (first frame only)", () => {
     const request = buildKlingImageToVideoRequest({
       prompt: "A smooth cinematic walkthrough of the property.",
       images: orderedImages,
@@ -27,14 +27,18 @@ describe("official Kling 3.0 request contract", () => {
       externalTaskId: "estatetour-generation-42",
     });
 
+    // Even with multiple images provided, only the first frame is used — the
+    // shot animates within one photo and is hard-cut to the next.
     expect(request.contents).toEqual([
       {
         type: "prompt",
         text: "A smooth cinematic walkthrough of the property. Target output composition: 16:9.",
       },
       { type: "first_frame", url: orderedImages[0].publicUrl },
-      { type: "last_frame", url: orderedImages[2].publicUrl },
     ]);
+    expect(
+      request.contents.some(content => content.type === "last_frame")
+    ).toBe(false);
     expect(request.settings).toEqual({
       multi_shot: false,
       audio: "off",

@@ -243,16 +243,14 @@ export function buildKlingImageToVideoRequest(params: {
   const compositionInstruction = ` Target output composition: ${aspectRatio}.`;
   const promptLimit = RECOMMENDED_PROMPT_LENGTH - compositionInstruction.length;
   const text = `${trimmedPrompt.slice(0, promptLimit)}${compositionInstruction}`;
+  // FIRST FRAME ONLY, always. Even if a segment carries more than one image we
+  // never send a last_frame: each shot animates the camera within its single
+  // starting photo and is joined to the next by a hard cut — never a morph
+  // between two different photos.
   const contents: KlingImageToVideoRequest["contents"] = [
     { type: "prompt", text },
     { type: "first_frame", url: ordered[0].publicUrl },
   ];
-  if (ordered.length > 1) {
-    contents.push({
-      type: "last_frame",
-      url: ordered[ordered.length - 1].publicUrl,
-    });
-  }
 
   return {
     contents,
